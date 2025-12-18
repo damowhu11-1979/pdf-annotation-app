@@ -8,7 +8,9 @@
 
 /* design polish */
 @layer components {
-  .toolbar { @apply sticky top-0 z-30 bg-white/90 backdrop-blur border-b shadow-sm p-3; }
+  .toolbar {
+    @apply sticky top-0 z-30 bg-white/90 backdrop-blur border-b shadow-sm p-3;
+  }
   .icon-btn {
     @apply h-9 w-9 rounded-lg grid place-items-center transition
            text-gray-600 hover:bg-gray-200;
