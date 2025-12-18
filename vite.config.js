@@ -3,5 +3,6 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
-  base: '/pdf-annotation-app/',   // <-- must match repo name (case-sensitive)
+  // keep this as '/' for local dev; set to '/pdf-annotation-app/' before deploy to GitHub Pages
+  // base: '/pdf-annotation-app/',
 })
