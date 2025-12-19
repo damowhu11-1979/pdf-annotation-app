@@ -296,39 +296,6 @@ const App = () => {
     return () => container.removeEventListener('wheel', handleWheel);
   }, []);
 
-  // GLOBAL Panning Listeners (Smoother than pointer capture)
-  // FIXED: Changed to 'pointermove'/'pointerup' to ensure compatibility when preventing default on pointerdown
-  useEffect(() => {
-    const handleGlobalPointerMove = (e) => {
-      if (isPanning.current && scrollContainerRef.current) {
-        e.preventDefault();
-        const dx = e.clientX - startPan.current.x;
-        const dy = e.clientY - startPan.current.y;
-        
-        scrollContainerRef.current.scrollLeft = startPan.current.sl - dx;
-        scrollContainerRef.current.scrollTop = startPan.current.st - dy;
-      }
-    };
-
-    const handleGlobalPointerUp = () => {
-      if (isPanning.current) {
-        isPanning.current = false;
-        setIsPanningState(false);
-        document.body.style.cursor = 'default';
-      }
-    };
-
-    window.addEventListener('pointermove', handleGlobalPointerMove);
-    window.addEventListener('pointerup', handleGlobalPointerUp);
-    window.addEventListener('pointercancel', handleGlobalPointerUp);
-    
-    return () => {
-      window.removeEventListener('pointermove', handleGlobalPointerMove);
-      window.removeEventListener('pointerup', handleGlobalPointerUp);
-      window.removeEventListener('pointercancel', handleGlobalPointerUp);
-    };
-  }, []);
-
   const renderPage = async (num) => {
     if (!pdfDoc) return;
 
@@ -375,8 +342,7 @@ const App = () => {
     }
   };
 
-  // --- Pan Logic (Start) ---
-  // Using Pointer events ensures better compatibility when bubbling from Canvas
+  // --- Pan Logic (Pointer Capture) ---
   const handleContainerPointerDown = (e) => {
     const isPanButton =
       e.button === 2 ||                // right
@@ -394,6 +360,13 @@ const App = () => {
     const el = scrollContainerRef.current;
     if (!el) return;
 
+    // IMPORTANT: Capture the pointer so we get move/up events even outside window
+    try {
+      el.setPointerCapture(e.pointerId);
+    } catch (err) {
+      console.warn("Failed to capture pointer", err);
+    }
+
     isPanning.current = true;
     setIsPanningState(true);
     document.body.style.cursor = 'grabbing';
@@ -404,6 +377,35 @@ const App = () => {
       sl: el.scrollLeft,
       st: el.scrollTop
     };
+  };
+
+  const handleContainerPointerMove = (e) => {
+    if (!isPanning.current) return;
+    
+    e.preventDefault();
+    const el = scrollContainerRef.current;
+    if (!el) return;
+
+    const dx = e.clientX - startPan.current.x;
+    const dy = e.clientY - startPan.current.y;
+    
+    el.scrollLeft = startPan.current.sl - dx;
+    el.scrollTop = startPan.current.st - dy;
+  };
+
+  const handleContainerPointerUp = (e) => {
+    if (isPanning.current) {
+      const el = scrollContainerRef.current;
+      if (el) {
+        try {
+          el.releasePointerCapture(e.pointerId);
+        } catch (err) {}
+      }
+
+      isPanning.current = false;
+      setIsPanningState(false);
+      document.body.style.cursor = 'default';
+    }
   };
 
   // --- Coordinates ---
@@ -1055,6 +1057,10 @@ const App = () => {
         className="flex-1 overflow-auto bg-gray-200 relative cursor-default"
         style={{ userSelect: 'none', touchAction: 'none' }} // Prevent browser touch scroll to allow pan
         onPointerDown={handleContainerPointerDown}
+        onPointerMove={handleContainerPointerMove}
+        onPointerUp={handleContainerPointerUp}
+        onPointerCancel={handleContainerPointerUp}
+        onPointerLeave={handleContainerPointerUp}
         onContextMenu={(e) => e.preventDefault()}
       >
         {!pdfDoc ? (
