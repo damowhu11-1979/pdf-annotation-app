@@ -17,12 +17,50 @@ import {
   Circle,
   Eraser,
   PaintBucket,
+  Sparkles,
+  Loader2,
+  Bot,
+  X
 } from 'lucide-react';
 
 // External libraries
 const PDFJS_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
 const PDFJS_WORKER_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 const JSPDF_URL = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+
+// --- Gemini API Helper ---
+const callGemini = async (prompt, systemInstruction = "") => {
+  const apiKey = ""; // Injected at runtime or pasted by user
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+
+  const payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    systemInstruction: systemInstruction ? { parts: [{ text: systemInstruction }] } : undefined,
+  };
+
+  let delay = 1000;
+  for (let i = 0; i < 5; i++) {
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        if (response.status === 429) throw new Error('Too Many Requests');
+        throw new Error(`API Error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      return data.candidates?.[0]?.content?.parts?.[0]?.text || "No response generated.";
+    } catch (error) {
+      if (i === 4) throw error;
+      await new Promise(r => setTimeout(r, delay));
+      delay *= 2;
+    }
+  }
+};
 
 const App = () => {
   const [pdfLib, setPdfLib] = useState(null);
@@ -48,7 +86,14 @@ const App = () => {
 
   // Text input overlay state
   const [textInput, setTextInput] = useState(null); // { x, y, text } in PDF coords
+  const textInputRef = useRef(null);
   const ignoreBlurRef = useRef(false);
+
+  // AI State
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisResult, setAnalysisResult] = useState(null);
+  const [showAnalysisModal, setShowAnalysisModal] = useState(false);
+  const [isPolishing, setIsPolishing] = useState(false);
 
   const canvasRef = useRef(null);
   const pdfCanvasRef = useRef(null);
@@ -57,11 +102,10 @@ const App = () => {
   const renderTaskRef = useRef(null);
   const renderRequestRef = useRef(0);
 
-  // Panning (Pointer Events)
+  // Panning State
   const isPanning = useRef(false);
   const [isPanningState, setIsPanningState] = useState(false);
   const startPan = useRef({ x: 0, y: 0, sl: 0, st: 0 });
-  const panPointerId = useRef(null);
 
   // Moving annotations (cursor tool)
   const dragAnnRef = useRef({
@@ -79,7 +123,6 @@ const App = () => {
 
   const translateAnn = (ann, dx, dy) => {
     const a = deepCopyAnn(ann);
-
     if (a.type === 'pen' || a.type === 'eraser') {
       a.points = a.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
     } else if (a.type === 'line' || a.type === 'arrow') {
@@ -104,7 +147,6 @@ const App = () => {
       const ys = ann.points.map(p => p.y);
       return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
     }
-
     if (ann.type === 'line' || ann.type === 'arrow') {
       return {
         minX: Math.min(ann.start.x, ann.end.x),
@@ -113,7 +155,6 @@ const App = () => {
         maxY: Math.max(ann.start.y, ann.end.y),
       };
     }
-
     if (ann.type === 'rect') {
       return {
         minX: Math.min(ann.start.x, ann.end.x),
@@ -122,7 +163,6 @@ const App = () => {
         maxY: Math.max(ann.start.y, ann.end.y),
       };
     }
-
     if (ann.type === 'circle') {
       return {
         minX: ann.center.x - ann.radius,
@@ -131,13 +171,11 @@ const App = () => {
         maxY: ann.center.y + ann.radius,
       };
     }
-
     if (ann.type === 'text') {
       const w = Math.max(10, (ann.text?.length || 1) * (ann.size * 0.6));
       const h = ann.size * 1.2;
       return { minX: ann.x, maxX: ann.x + w, minY: ann.y, maxY: ann.y + h };
     }
-
     return { minX: 0, maxX: 0, minY: 0, maxY: 0 };
   };
 
@@ -220,14 +258,22 @@ const App = () => {
   useEffect(() => {
     if (!pdfDoc) return;
     renderPage(pageNum);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pdfDoc, pageNum, scale, pdfLib]);
 
   // Redraw annotations
   useEffect(() => {
     drawAnnotations();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [annotations, pageNum, scale, currentPath, startPoint, isFilled, isDrawing, selectedIndex]);
+
+  // Force focus on text input when it opens
+  useEffect(() => {
+    if (textInput && textInputRef.current) {
+        // Short timeout ensures the element is rendered and ready
+        setTimeout(() => {
+             textInputRef.current?.focus();
+        }, 10);
+    }
+  }, [textInput]);
 
   // Wheel zoom (non-passive)
   useEffect(() => {
@@ -251,6 +297,36 @@ const App = () => {
 
     container.addEventListener('wheel', handleWheel, { passive: false });
     return () => container.removeEventListener('wheel', handleWheel);
+  }, []);
+
+  // GLOBAL Panning Listeners (Smoother than pointer capture)
+  useEffect(() => {
+    const handleGlobalMouseMove = (e) => {
+      if (isPanning.current && scrollContainerRef.current) {
+        e.preventDefault();
+        const dx = e.clientX - startPan.current.x;
+        const dy = e.clientY - startPan.current.y;
+        
+        scrollContainerRef.current.scrollLeft = startPan.current.sl - dx;
+        scrollContainerRef.current.scrollTop = startPan.current.st - dy;
+      }
+    };
+
+    const handleGlobalMouseUp = () => {
+      if (isPanning.current) {
+        isPanning.current = false;
+        setIsPanningState(false);
+        document.body.style.cursor = 'default';
+      }
+    };
+
+    window.addEventListener('mousemove', handleGlobalMouseMove);
+    window.addEventListener('mouseup', handleGlobalMouseUp);
+    
+    return () => {
+      window.removeEventListener('mousemove', handleGlobalMouseMove);
+      window.removeEventListener('mouseup', handleGlobalMouseUp);
+    };
   }, []);
 
   const renderPage = async (num) => {
@@ -299,26 +375,27 @@ const App = () => {
     }
   };
 
-  // --- Pan Logic (Pointer Events) ---
-  const handleContainerPointerDown = (e) => {
+  // --- Pan Logic (Start) ---
+  const handleContainerMouseDown = (e) => {
     const isPanButton =
-      e.button === 2 ||               // right
-      e.button === 1 ||               // middle
+      e.button === 2 ||                // right
+      e.button === 1 ||                // middle
       (e.button === 0 && activeTool === 'cursor'); // left when cursor
 
     if (!isPanButton) return;
 
-    // If cursor tool and user is clicking on an object, canvas will stop propagation.
+    // Don't pan if we are hovering over an annotation (let hit test handle it)
+    // But since hit test is on canvas, and this is container, we check targets
+    // We rely on canvas stopping prop if it hits an object
+    
     e.preventDefault();
 
     const el = scrollContainerRef.current;
     if (!el) return;
 
-    panPointerId.current = e.pointerId;
-    try { el.setPointerCapture(e.pointerId); } catch {}
-
     isPanning.current = true;
     setIsPanningState(true);
+    document.body.style.cursor = 'grabbing';
 
     startPan.current = {
       x: e.clientX,
@@ -326,33 +403,6 @@ const App = () => {
       sl: el.scrollLeft,
       st: el.scrollTop
     };
-  };
-
-  const handleContainerPointerMove = (e) => {
-    if (!isPanning.current) return;
-    if (panPointerId.current !== e.pointerId) return;
-
-    e.preventDefault();
-
-    const el = scrollContainerRef.current;
-    if (!el) return;
-
-    const dx = e.clientX - startPan.current.x;
-    const dy = e.clientY - startPan.current.y;
-
-    el.scrollLeft = startPan.current.sl - dx;
-    el.scrollTop = startPan.current.st - dy;
-  };
-
-  const handleContainerPointerUp = (e) => {
-    if (panPointerId.current !== e.pointerId) return;
-
-    const el = scrollContainerRef.current;
-    try { el?.releasePointerCapture(e.pointerId); } catch {}
-
-    panPointerId.current = null;
-    isPanning.current = false;
-    setIsPanningState(false);
   };
 
   // --- Coordinates ---
@@ -368,9 +418,51 @@ const App = () => {
     return { x: canvasX / scale, y: canvasY / scale };
   };
 
+  // --- AI Features ---
+  const handleAnalyzePage = async () => {
+    if (!pdfDoc) return;
+    setIsAnalyzing(true);
+    setShowAnalysisModal(true);
+    setAnalysisResult(""); 
+    
+    try {
+      const page = await pdfDoc.getPage(pageNum);
+      const textContent = await page.getTextContent();
+      const text = textContent.items.map(item => item.str).join(' ');
+      
+      if (!text.trim()) {
+        setAnalysisResult("No text found on this page to analyze. It might be an image-only PDF.");
+        setIsAnalyzing(false);
+        return;
+      }
+
+      const prompt = `Here is the text from page ${pageNum} of a PDF document: "${text}". \n\nPlease provide a concise summary of this page and list the top 3 key takeaways. Format the output with bold headings.`;
+      const result = await callGemini(prompt, "You are a helpful PDF assistant.");
+      setAnalysisResult(result);
+    } catch (error) {
+      setAnalysisResult("Failed to analyze page. Please try again.");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const handlePolishText = async () => {
+    if (!textInput || !textInput.text.trim()) return;
+    setIsPolishing(true);
+    
+    try {
+      const prompt = `Rewrite the following text to be more professional, grammatically correct, and concise: "${textInput.text}". Return ONLY the rewritten text, no explanations.`;
+      const polishedText = await callGemini(prompt, "You are a professional editor.");
+      setTextInput(prev => ({ ...prev, text: polishedText.trim() }));
+    } catch (error) {
+      console.error("Polishing failed", error);
+    } finally {
+      setIsPolishing(false);
+    }
+  };
+
   // --- Text finalize ---
   const finalizeText = () => {
-    if (ignoreBlurRef.current) return;
     if (!textInput) return;
 
     const t = (textInput.text || '').trim();
@@ -393,6 +485,12 @@ const App = () => {
       [pageNum]: [...(prev[pageNum] || []), newAnn]
     }));
     setTextInput(null);
+  };
+
+  // Separate handler for blur that checks the ignore flag
+  const handleInputBlur = () => {
+    if (ignoreBlurRef.current) return;
+    finalizeText();
   };
 
   const handleTextSubmit = (e) => {
@@ -464,11 +562,15 @@ const App = () => {
     const coords = getPdfCoordinates(e);
 
     if (activeTool === 'text') {
+      // If we are already typing, save the current text manually before moving
       if (textInput) {
+        // Prevent the onBlur from double-saving or clearing the wrong state
         ignoreBlurRef.current = true;
         finalizeText();
+        // Reset the flag after a short delay to allow the blur event to fire and be ignored
         setTimeout(() => { ignoreBlurRef.current = false; }, 50);
       }
+      // Start the new text input
       setTextInput({ x: coords.x, y: coords.y, text: '' });
       return;
     }
@@ -672,8 +774,7 @@ const App = () => {
         } else if (activeTool === 'rect') {
           drawItem({ type: 'rect', start: startPoint, end: tempEnd, color, width: lineWidth, filled: isFilled }, -999);
         } else if (activeTool === 'circle') {
-          const r = Math.sqrt(Math.pow(tempEnd.x - startPoint.x, 2) + Math.pow(tempEnd.y - startPoint.y, 2));
-          drawItem({ type: 'circle', center: startPoint, radius: r, color, width: lineWidth, filled: isFilled }, -999);
+          drawItem({ type: 'circle', center: startPoint, radius: Math.sqrt(Math.pow(tempEnd.x - startPoint.x, 2) + Math.pow(tempEnd.y - startPoint.y, 2)), color, width: lineWidth, filled: isFilled }, -999);
         }
       }
     }
@@ -924,6 +1025,18 @@ const App = () => {
         </div>
 
         <div className="flex items-center gap-2">
+            {/* AI Assistant Button */}
+            <button 
+              onClick={handleAnalyzePage}
+              disabled={!pdfDoc}
+              className={`p-2 rounded text-indigo-600 hover:bg-indigo-50 flex items-center gap-2 transition-all ${!pdfDoc ? 'opacity-50 cursor-not-allowed' : ''}`}
+              title="Analyze Page with AI"
+            >
+              <Sparkles size={18} />
+              <span className="hidden sm:inline font-medium">Analyze Page</span>
+            </button>
+            <div className="h-6 w-px bg-gray-300 mx-2"></div>
+
           <button
             onClick={undoLast}
             className="p-2 hover:bg-gray-100 rounded text-gray-600"
@@ -961,11 +1074,7 @@ const App = () => {
         ref={scrollContainerRef}
         className="flex-1 overflow-auto bg-gray-200 relative cursor-default"
         style={{ userSelect: 'none' }}
-        onPointerDown={handleContainerPointerDown}
-        onPointerMove={handleContainerPointerMove}
-        onPointerUp={handleContainerPointerUp}
-        onPointerCancel={handleContainerPointerUp}
-        onPointerLeave={handleContainerPointerUp}
+        onMouseDown={handleContainerMouseDown}
         onContextMenu={(e) => e.preventDefault()}
       >
         {!pdfDoc ? (
@@ -1012,28 +1121,42 @@ const App = () => {
               {/* Text Input Overlay */}
               {textInput && (
                 <div
-                  className="absolute z-50 flex items-center"
+                  className="absolute z-50 flex items-center gap-2"
                   style={{
                     left: textInput.x * scale,
                     top: (textInput.y * scale) - 8
                   }}
                 >
                   <input
+                    ref={textInputRef}
                     autoFocus
                     value={textInput.text}
                     onChange={(e) => setTextInput({ ...textInput, text: e.target.value })}
-                    onBlur={finalizeText}
+                    onBlur={handleInputBlur}
                     onKeyDown={handleTextSubmit}
-                    className="bg-white border border-blue-500 rounded px-2 py-1 outline-none shadow-lg min-w-[200px]"
+                    className="bg-white border border-blue-500 rounded px-2 py-1 outline-none text-blue-900 placeholder-blue-300 shadow-lg min-w-[200px]"
                     style={{
                       font: `${16 * scale}px sans-serif`,
                       color: color,
                       lineHeight: 1.2
                     }}
-                    placeholder="Type… (Enter to save)"
+                    placeholder="Type..."
                     onPointerDown={(e) => e.stopPropagation()}
-                    onContextMenu={(e) => e.preventDefault()}
                   />
+                  
+                {/* AI Polish Button */}
+                <button
+                   onMouseDown={(e) => {
+                     e.preventDefault(); // Prevent blur
+                     e.stopPropagation();
+                     handlePolishText();
+                   }}
+                   disabled={isPolishing || !textInput.text}
+                   className="bg-indigo-600 text-white p-1.5 rounded-full shadow-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                   title="Rewrite with AI"
+                >
+                   {isPolishing ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
+                </button>
                 </div>
               )}
             </div>
@@ -1041,41 +1164,44 @@ const App = () => {
         )}
       </div>
 
-      {/* Footer / Pagination */}
-      {pdfDoc && (
-        <div className="bg-white border-t p-2 flex justify-between items-center px-6 z-10">
-          <div className="flex items-center gap-2">
-            <button onClick={() => setScale(s => Math.max(0.25, s - 0.25))} className="p-2 hover:bg-gray-100 rounded">
-              <ZoomOut size={16} />
-            </button>
-            <span className="text-xs font-mono w-12 text-center">{Math.round(scale * 100)}%</span>
-            <button onClick={() => setScale(s => Math.min(4, s + 0.25))} className="p-2 hover:bg-gray-100 rounded">
-              <ZoomIn size={16} />
-            </button>
-          </div>
-
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => setPageNum(p => Math.max(1, p - 1))}
-              disabled={pageNum <= 1}
-              className="p-2 hover:bg-gray-100 rounded disabled:opacity-30"
-            >
-              <ChevronLeft size={20} />
-            </button>
-            <span className="font-medium text-sm">
-              Page {pageNum} of {pdfDoc.numPages}
-            </span>
-            <button
-              onClick={() => setPageNum(p => Math.min(pdfDoc.numPages, p + 1))}
-              disabled={pageNum >= pdfDoc.numPages}
-              className="p-2 hover:bg-gray-100 rounded disabled:opacity-30"
-            >
-              <ChevronRight size={20} />
-            </button>
-          </div>
-
-          <div className="text-xs text-gray-400 max-w-[200px] truncate">
-            {fileName}
+       {/* Analysis Modal */}
+      {showAnalysisModal && (
+        <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col">
+            <div className="p-4 border-b flex justify-between items-center bg-indigo-50 rounded-t-xl">
+              <div className="flex items-center gap-2 text-indigo-900 font-semibold">
+                <Bot size={20} />
+                <span>Page {pageNum} Analysis</span>
+              </div>
+              <button 
+                onClick={() => setShowAnalysisModal(false)}
+                className="p-1 hover:bg-indigo-100 rounded-full text-indigo-700"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-6 overflow-y-auto">
+              {isAnalyzing ? (
+                <div className="flex flex-col items-center justify-center py-8 text-gray-500 gap-3">
+                  <Loader2 size={32} className="animate-spin text-indigo-500" />
+                  <p>Analyzing text content...</p>
+                </div>
+              ) : (
+                <div className="prose prose-sm max-w-none text-gray-700 whitespace-pre-wrap">
+                  {analysisResult}
+                </div>
+              )}
+            </div>
+            
+            <div className="p-4 border-t bg-gray-50 rounded-b-xl flex justify-end">
+              <button
+                onClick={() => setShowAnalysisModal(false)}
+                className="px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700 font-medium"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}
