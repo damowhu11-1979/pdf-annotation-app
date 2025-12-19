@@ -3,7 +3,6 @@ import {
   Upload,
   Pen,
   Minus,
-  Type,
   ChevronLeft,
   ChevronRight,
   RotateCcw,
@@ -16,7 +15,6 @@ import {
   Circle,
   Eraser,
   PaintBucket,
-  Sparkles,
   X,
   Loader2,
   Bot,
@@ -27,9 +25,9 @@ const PDFJS_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.mi
 const PDFJS_WORKER_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 const JSPDF_URL = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
 
-// --- Gemini API Helper ---
+// --- Gemini API Helper (kept, but Analyze button removed) ---
 const callGemini = async (prompt, systemInstruction = "") => {
-  const apiKey = "AIzaSyAvMz690LneR8w8V3IZysJUQD6C_aoTWEM"; // Injected at runtime
+  const apiKey = ""; // Injected at runtime
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
 
   const payload = {
@@ -66,10 +64,10 @@ const App = () => {
   const [jspdfLib, setJspdfLib] = useState(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [pageNum, setPageNum] = useState(1);
-  const [scale, setScale] = useState(1.5); // Viewport zoom level
+  const [scale, setScale] = useState(1.5);
   const [fileName, setFileName] = useState("document.pdf");
 
-  // Tools: 'cursor', 'pen', 'line', 'rect', 'circle', 'text', 'eraser'
+  // Tools: 'cursor', 'pen', 'line', 'rect', 'circle', 'eraser'
   const [activeTool, setActiveTool] = useState('cursor');
   const [color, setColor] = useState('#EF4444');
   const [lineWidth, setLineWidth] = useState(3);
@@ -82,13 +80,11 @@ const App = () => {
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentPath, setCurrentPath] = useState([]);
   const [startPoint, setStartPoint] = useState(null);
-  const [textInput, setTextInput] = useState(null);
 
-  // AI State
+  // AI State (kept but unused in UI)
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState(null);
   const [showAnalysisModal, setShowAnalysisModal] = useState(false);
-  const [isPolishing, setIsPolishing] = useState(false);
 
   const canvasRef = useRef(null);
   const pdfCanvasRef = useRef(null);
@@ -99,9 +95,8 @@ const App = () => {
 
   // Panning
   const isPanning = useRef(false);
-  const [isPanningState, setIsPanningState] = useState(false); // to update cursor live
+  const [isPanningState, setIsPanningState] = useState(false);
   const startPan = useRef({ x: 0, y: 0, sl: 0, st: 0 });
-  const ignoreBlurRef = useRef(false);
 
   // Load Libraries
   useEffect(() => {
@@ -246,52 +241,8 @@ const App = () => {
     }
   };
 
-  // --- AI Features ---
-  const handleAnalyzePage = async () => {
-    if (!pdfDoc) return;
-    setIsAnalyzing(true);
-    setShowAnalysisModal(true);
-    setAnalysisResult("");
-
-    try {
-      const page = await pdfDoc.getPage(pageNum);
-      const textContent = await page.getTextContent();
-      const text = textContent.items.map(item => item.str).join(' ');
-
-      if (!text.trim()) {
-        setAnalysisResult("No text found on this page to analyze. It might be an image-only PDF.");
-        setIsAnalyzing(false);
-        return;
-      }
-
-      const prompt = `Here is the text from page ${pageNum} of a PDF document: "${text}".\n\nPlease provide a concise summary of this page and list the top 3 key takeaways. Format the output with bold headings.`;
-      const result = await callGemini(prompt, "You are a helpful PDF assistant.");
-      setAnalysisResult(result);
-    } catch (error) {
-      setAnalysisResult("Failed to analyze page. Please try again.");
-    } finally {
-      setIsAnalyzing(false);
-    }
-  };
-
-  const handlePolishText = async () => {
-    if (!textInput || !textInput.text.trim()) return;
-    setIsPolishing(true);
-
-    try {
-      const prompt = `Rewrite the following text to be more professional, grammatically correct, and concise: "${textInput.text}". Return ONLY the rewritten text, no explanations.`;
-      const polishedText = await callGemini(prompt, "You are a professional editor.");
-      setTextInput(prev => ({ ...prev, text: polishedText.trim() }));
-    } catch (error) {
-      console.error("Polishing failed", error);
-    } finally {
-      setIsPolishing(false);
-    }
-  };
-
-  // --- Pan Logic (FIXED) ---
+  // --- Pan Logic ---
   const handleContainerMouseDown = (e) => {
-    // 2 = right, 1 = middle, 0 = left
     if (e.button === 2 || e.button === 1 || (e.button === 0 && activeTool === 'cursor')) {
       e.preventDefault();
       const el = scrollContainerRef.current;
@@ -341,40 +292,12 @@ const App = () => {
   const startDrawing = (e) => {
     if (e.button !== 0) return;
 
-    // If tool is cursor, allow panning (bubble to container)
+    // Cursor tool -> pan handled by container
     if (activeTool === 'cursor') return;
 
     if (isPanning.current) return;
 
     const coords = getPdfCoordinates(e);
-
-    if (activeTool === 'text') {
-      if (textInput) {
-        ignoreBlurRef.current = true;
-
-        if (textInput.text.trim()) {
-          const newAnn = {
-            type: 'text',
-            x: textInput.x,
-            y: textInput.y,
-            text: textInput.text,
-            color,
-            size: 16
-          };
-          setAnnotations(prev => ({
-            ...prev,
-            [pageNum]: [...(prev[pageNum] || []), newAnn]
-          }));
-        }
-
-        setTextInput({ x: coords.x, y: coords.y, text: '' });
-        setTimeout(() => { ignoreBlurRef.current = false; }, 50);
-        return;
-      }
-
-      setTextInput({ x: coords.x, y: coords.y, text: '' });
-      return;
-    }
 
     setIsDrawing(true);
     setStartPoint(coords);
@@ -432,38 +355,6 @@ const App = () => {
     if (canvasRef.current) canvasRef.current.tempEnd = null;
   };
 
-  const handleTextSubmit = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      finalizeText();
-    }
-  };
-
-  const finalizeText = () => {
-    if (ignoreBlurRef.current) return;
-    if (!textInput) return;
-
-    if (!textInput.text.trim()) {
-      setTextInput(null);
-      return;
-    }
-
-    const newAnn = {
-      type: 'text',
-      x: textInput.x,
-      y: textInput.y,
-      text: textInput.text,
-      color,
-      size: 16
-    };
-
-    setAnnotations(prev => ({
-      ...prev,
-      [pageNum]: [...(prev[pageNum] || []), newAnn]
-    }));
-    setTextInput(null);
-  };
-
   const drawAnnotations = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -508,10 +399,6 @@ const App = () => {
         ctx.arc(ann.center.x * scale, ann.center.y * scale, ann.radius * scale, 0, 2 * Math.PI);
         if (ann.filled) ctx.fill();
         ctx.stroke();
-      } else if (ann.type === 'text') {
-        ctx.font = `${ann.size * scale}px sans-serif`;
-        ctx.textBaseline = 'top';
-        ctx.fillText(ann.text, ann.x * scale, ann.y * scale);
       }
 
       ctx.restore();
@@ -545,9 +432,7 @@ const App = () => {
   const undoLast = () => {
     const pageAnns = annotations[pageNum] || [];
     if (pageAnns.length === 0) return;
-
-    const newAnns = pageAnns.slice(0, -1);
-    setAnnotations(prev => ({ ...prev, [pageNum]: newAnns }));
+    setAnnotations(prev => ({ ...prev, [pageNum]: pageAnns.slice(0, -1) }));
   };
 
   const exportPDF = async () => {
@@ -623,10 +508,6 @@ const App = () => {
           ctx.arc(ann.center.x * s, ann.center.y * s, ann.radius * s, 0, 2 * Math.PI);
           if (ann.filled) ctx.fill();
           ctx.stroke();
-        } else if (ann.type === 'text') {
-          ctx.font = `${ann.size * s}px sans-serif`;
-          ctx.textBaseline = 'top';
-          ctx.fillText(ann.text, ann.x * s, ann.y * s);
         }
         ctx.restore();
       });
@@ -662,6 +543,7 @@ const App = () => {
 
           <div className="h-6 w-px bg-gray-300 mx-2"></div>
 
+          {/* Tool Buttons (TEXT removed) */}
           <div className="flex items-center gap-1 bg-gray-50 p-1 rounded-lg border overflow-x-auto max-w-[50vw] sm:max-w-none no-scrollbar">
             <ToolButton
               active={activeTool === 'cursor'}
@@ -699,12 +581,6 @@ const App = () => {
               onClick={() => setActiveTool('circle')}
               icon={<Circle size={18} />}
               label="Circle"
-            />
-            <ToolButton
-              active={activeTool === 'text'}
-              onClick={() => setActiveTool('text')}
-              icon={<Type size={18} />}
-              label="Text"
             />
           </div>
 
@@ -752,18 +628,6 @@ const App = () => {
 
         <div className="flex items-center gap-2">
           <button
-            onClick={handleAnalyzePage}
-            disabled={!pdfDoc}
-            className={`p-2 rounded text-indigo-600 hover:bg-indigo-50 flex items-center gap-2 transition-all ${!pdfDoc ? 'opacity-50 cursor-not-allowed' : ''}`}
-            title="Analyze Page with AI"
-          >
-            <Sparkles size={18} />
-            <span className="hidden sm:inline font-medium">Analyze Page</span>
-          </button>
-
-          <div className="h-6 w-px bg-gray-300 mx-2"></div>
-
-          <button
             onClick={undoLast}
             className="p-2 hover:bg-gray-100 rounded text-gray-600"
             title="Undo last action"
@@ -795,7 +659,7 @@ const App = () => {
         </div>
       </div>
 
-      {/* Main Workspace (FIXED: no justify-center / no p-8 here) */}
+      {/* Main Workspace */}
       <div
         ref={scrollContainerRef}
         className="flex-1 overflow-auto bg-gray-200 relative cursor-default"
@@ -820,7 +684,6 @@ const App = () => {
             </div>
           </div>
         ) : (
-          // Spacer wrapper becomes scrollable content. This is what lets you pan fully left.
           <div className="p-8 w-max h-max">
             <div
               className="relative shadow-xl origin-top-left"
@@ -830,10 +693,7 @@ const App = () => {
                 cursor: isPanningState ? 'grabbing' : activeTool === 'cursor' ? 'grab' : 'crosshair'
               }}
             >
-              {/* Layer 1: The PDF Render */}
               <canvas ref={pdfCanvasRef} className="bg-white block" />
-
-              {/* Layer 2: The Drawing/Annotation Layer */}
               <canvas
                 ref={canvasRef}
                 className="absolute top-0 left-0"
@@ -842,46 +702,6 @@ const App = () => {
                 onMouseUp={stopDrawing}
                 onMouseLeave={stopDrawing}
               />
-
-              {/* Text Input Overlay */}
-              {textInput && (
-                <div
-                  className="absolute z-50 flex items-center gap-2"
-                  style={{
-                    left: textInput.x * scale,
-                    top: (textInput.y * scale) - 8
-                  }}
-                >
-                  <input
-                    autoFocus
-                    value={textInput.text}
-                    onChange={(e) => setTextInput({ ...textInput, text: e.target.value })}
-                    onBlur={finalizeText}
-                    onKeyDown={handleTextSubmit}
-                    className="bg-white border border-blue-500 rounded px-2 py-1 outline-none text-blue-900 placeholder-blue-300 shadow-lg min-w-[200px]"
-                    style={{
-                      font: `${16 * scale}px sans-serif`,
-                      color: color,
-                      lineHeight: 1.2
-                    }}
-                    placeholder="Type..."
-                    onMouseDown={(e) => e.stopPropagation()}
-                  />
-
-                  <button
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      handlePolishText();
-                    }}
-                    disabled={isPolishing || !textInput.text}
-                    className="bg-indigo-600 text-white p-1.5 rounded-full shadow-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
-                    title="Rewrite with AI"
-                  >
-                    {isPolishing ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
-                  </button>
-                </div>
-              )}
             </div>
           </div>
         )}
@@ -926,7 +746,7 @@ const App = () => {
         </div>
       )}
 
-      {/* Analysis Modal */}
+      {/* Analysis Modal (button removed, but modal kept in case you re-add later) */}
       {showAnalysisModal && (
         <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col">
