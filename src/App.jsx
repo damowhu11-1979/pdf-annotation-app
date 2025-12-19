@@ -57,10 +57,106 @@ const App = () => {
   const renderTaskRef = useRef(null);
   const renderRequestRef = useRef(0);
 
-  // Panning
+  // Panning (Pointer Events)
   const isPanning = useRef(false);
   const [isPanningState, setIsPanningState] = useState(false);
   const startPan = useRef({ x: 0, y: 0, sl: 0, st: 0 });
+  const panPointerId = useRef(null);
+
+  // Moving annotations (cursor tool)
+  const dragAnnRef = useRef({
+    active: false,
+    index: -1,
+    start: { x: 0, y: 0 },   // PDF coords at drag start
+    original: null,         // deep copy of original annotation
+  });
+
+  // Optional selection highlight
+  const [selectedIndex, setSelectedIndex] = useState(-1);
+
+  // --------- Helpers: deep copy + translate annotation ----------
+  const deepCopyAnn = (ann) => JSON.parse(JSON.stringify(ann));
+
+  const translateAnn = (ann, dx, dy) => {
+    const a = deepCopyAnn(ann);
+
+    if (a.type === 'pen' || a.type === 'eraser') {
+      a.points = a.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
+    } else if (a.type === 'line' || a.type === 'arrow') {
+      a.start = { x: a.start.x + dx, y: a.start.y + dy };
+      a.end = { x: a.end.x + dx, y: a.end.y + dy };
+    } else if (a.type === 'rect') {
+      a.start = { x: a.start.x + dx, y: a.start.y + dy };
+      a.end = { x: a.end.x + dx, y: a.end.y + dy };
+    } else if (a.type === 'circle') {
+      a.center = { x: a.center.x + dx, y: a.center.y + dy };
+    } else if (a.type === 'text') {
+      a.x = a.x + dx;
+      a.y = a.y + dy;
+    }
+    return a;
+  };
+
+  // --------- Helpers: bounding boxes / hit testing ----------
+  const annBBoxPdf = (ann) => {
+    if (ann.type === 'pen' || ann.type === 'eraser') {
+      const xs = ann.points.map(p => p.x);
+      const ys = ann.points.map(p => p.y);
+      return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
+    }
+
+    if (ann.type === 'line' || ann.type === 'arrow') {
+      return {
+        minX: Math.min(ann.start.x, ann.end.x),
+        maxX: Math.max(ann.start.x, ann.end.x),
+        minY: Math.min(ann.start.y, ann.end.y),
+        maxY: Math.max(ann.start.y, ann.end.y),
+      };
+    }
+
+    if (ann.type === 'rect') {
+      return {
+        minX: Math.min(ann.start.x, ann.end.x),
+        maxX: Math.max(ann.start.x, ann.end.x),
+        minY: Math.min(ann.start.y, ann.end.y),
+        maxY: Math.max(ann.start.y, ann.end.y),
+      };
+    }
+
+    if (ann.type === 'circle') {
+      return {
+        minX: ann.center.x - ann.radius,
+        maxX: ann.center.x + ann.radius,
+        minY: ann.center.y - ann.radius,
+        maxY: ann.center.y + ann.radius,
+      };
+    }
+
+    if (ann.type === 'text') {
+      const w = Math.max(10, (ann.text?.length || 1) * (ann.size * 0.6));
+      const h = ann.size * 1.2;
+      return { minX: ann.x, maxX: ann.x + w, minY: ann.y, maxY: ann.y + h };
+    }
+
+    return { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+  };
+
+  const hitTestPage = (ptPdf) => {
+    const pageAnns = annotations[pageNum] || [];
+    const tol = 10 / scale; // ~10px tolerance converted to PDF units
+    for (let i = pageAnns.length - 1; i >= 0; i--) {
+      const bb = annBBoxPdf(pageAnns[i]);
+      if (
+        ptPdf.x >= bb.minX - tol &&
+        ptPdf.x <= bb.maxX + tol &&
+        ptPdf.y >= bb.minY - tol &&
+        ptPdf.y <= bb.maxY + tol
+      ) {
+        return i;
+      }
+    }
+    return -1;
+  };
 
   // Load Libraries
   useEffect(() => {
@@ -111,6 +207,7 @@ const App = () => {
         setPageNum(1);
         setAnnotations({});
         setTextInput(null);
+        setSelectedIndex(-1);
       } catch (error) {
         console.error('Error loading PDF:', error);
         alert('Error parsing PDF. Please try another file.');
@@ -130,7 +227,7 @@ const App = () => {
   useEffect(() => {
     drawAnnotations();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [annotations, pageNum, scale, currentPath, startPoint, isFilled, isDrawing]);
+  }, [annotations, pageNum, scale, currentPath, startPoint, isFilled, isDrawing, selectedIndex]);
 
   // Wheel zoom (non-passive)
   useEffect(() => {
@@ -202,39 +299,60 @@ const App = () => {
     }
   };
 
-  // --- Pan Logic ---
-  const handleContainerMouseDown = (e) => {
-    if (e.button === 2 || e.button === 1 || (e.button === 0 && activeTool === 'cursor')) {
-      e.preventDefault();
-      const el = scrollContainerRef.current;
-      if (!el) return;
+  // --- Pan Logic (Pointer Events) ---
+  const handleContainerPointerDown = (e) => {
+    const isPanButton =
+      e.button === 2 ||               // right
+      e.button === 1 ||               // middle
+      (e.button === 0 && activeTool === 'cursor'); // left when cursor
 
-      isPanning.current = true;
-      setIsPanningState(true);
-      startPan.current = { x: e.clientX, y: e.clientY, sl: el.scrollLeft, st: el.scrollTop };
-    }
+    if (!isPanButton) return;
+
+    // If cursor tool and user is clicking on an object, canvas will stop propagation.
+    e.preventDefault();
+
+    const el = scrollContainerRef.current;
+    if (!el) return;
+
+    panPointerId.current = e.pointerId;
+    try { el.setPointerCapture(e.pointerId); } catch {}
+
+    isPanning.current = true;
+    setIsPanningState(true);
+
+    startPan.current = {
+      x: e.clientX,
+      y: e.clientY,
+      sl: el.scrollLeft,
+      st: el.scrollTop
+    };
   };
 
-  const handleContainerMouseMove = (e) => {
-    if (isPanning.current && scrollContainerRef.current) {
-      e.preventDefault();
-      const el = scrollContainerRef.current;
+  const handleContainerPointerMove = (e) => {
+    if (!isPanning.current) return;
+    if (panPointerId.current !== e.pointerId) return;
 
-      const dx = e.clientX - startPan.current.x;
-      const dy = e.clientY - startPan.current.y;
+    e.preventDefault();
 
-      el.scrollLeft = startPan.current.sl - dx;
-      el.scrollTop = startPan.current.st - dy;
-    }
+    const el = scrollContainerRef.current;
+    if (!el) return;
+
+    const dx = e.clientX - startPan.current.x;
+    const dy = e.clientY - startPan.current.y;
+
+    el.scrollLeft = startPan.current.sl - dx;
+    el.scrollTop = startPan.current.st - dy;
   };
 
-  const handleContainerMouseUp = () => {
+  const handleContainerPointerUp = (e) => {
+    if (panPointerId.current !== e.pointerId) return;
+
+    const el = scrollContainerRef.current;
+    try { el?.releasePointerCapture(e.pointerId); } catch {}
+
+    panPointerId.current = null;
     isPanning.current = false;
     setIsPanningState(false);
-  };
-
-  const handleContextMenu = (e) => {
-    e.preventDefault();
   };
 
   // --- Coordinates ---
@@ -284,22 +402,71 @@ const App = () => {
     }
   };
 
-  // --- Drawing ---
-  const startDrawing = (e) => {
+  // --- Arrow drawing helper ---
+  const strokeArrow = (ctx, x1, y1, x2, y2, headLenPx) => {
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+
+    const angle = Math.atan2(y2 - y1, x2 - x1);
+    const a1 = angle - Math.PI / 7;
+    const a2 = angle + Math.PI / 7;
+
+    const hx1 = x2 - headLenPx * Math.cos(a1);
+    const hy1 = y2 - headLenPx * Math.sin(a1);
+    const hx2 = x2 - headLenPx * Math.cos(a2);
+    const hy2 = y2 - headLenPx * Math.sin(a2);
+
+    ctx.beginPath();
+    ctx.moveTo(x2, y2);
+    ctx.lineTo(hx1, hy1);
+    ctx.moveTo(x2, y2);
+    ctx.lineTo(hx2, hy2);
+    ctx.stroke();
+  };
+
+  // --- Canvas interactions: cursor move/select + drawing ---
+  const handleCanvasPointerDown = (e) => {
+    // prevent browser gestures
+    if (e.button === 2) {
+      e.preventDefault();
+      // allow container to start pan; do not stopPropagation here unless on object
+    }
+
+    // Only act on primary/left button for editing, but right button should still be able to pan
     if (e.button !== 0) return;
 
-    // Cursor tool -> pan handled by container
-    if (activeTool === 'cursor') return;
-    if (isPanning.current) return;
+    // Cursor tool: try select/move annotation; if none hit, let container pan
+    if (activeTool === 'cursor') {
+      const pt = getPdfCoordinates(e);
+      const idx = hitTestPage(pt);
+      setSelectedIndex(idx);
+
+      if (idx !== -1) {
+        // Stop pan bubbling when we drag an object
+        e.preventDefault();
+        e.stopPropagation();
+
+        dragAnnRef.current.active = true;
+        dragAnnRef.current.index = idx;
+        dragAnnRef.current.start = pt;
+
+        const pageAnns = annotations[pageNum] || [];
+        dragAnnRef.current.original = deepCopyAnn(pageAnns[idx]);
+
+        // capture pointer on canvas so drag remains smooth
+        try { canvasRef.current?.setPointerCapture(e.pointerId); } catch {}
+      }
+      return;
+    }
 
     const coords = getPdfCoordinates(e);
 
     if (activeTool === 'text') {
-      // Commit existing textbox and start new one
       if (textInput) {
         ignoreBlurRef.current = true;
         finalizeText();
-        // allow finalizeText() state to settle before placing new box
         setTimeout(() => { ignoreBlurRef.current = false; }, 50);
       }
       setTextInput({ x: coords.x, y: coords.y, text: '' });
@@ -312,10 +479,35 @@ const App = () => {
     if (activeTool === 'pen' || activeTool === 'eraser') {
       setCurrentPath([coords]);
     }
+
+    try { canvasRef.current?.setPointerCapture(e.pointerId); } catch {}
   };
 
-  const draw = (e) => {
+  const handleCanvasPointerMove = (e) => {
+    // dragging an annotation (cursor tool)
+    if (dragAnnRef.current.active) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const pt = getPdfCoordinates(e);
+      const { start, index, original } = dragAnnRef.current;
+      const dx = pt.x - start.x;
+      const dy = pt.y - start.y;
+
+      const moved = translateAnn(original, dx, dy);
+
+      setAnnotations(prev => {
+        const pageAnns = [...(prev[pageNum] || [])];
+        if (index < 0 || index >= pageAnns.length) return prev;
+        pageAnns[index] = moved;
+        return { ...prev, [pageNum]: pageAnns };
+      });
+      return;
+    }
+
+    // drawing preview
     if (!isDrawing) return;
+
     const coords = getPdfCoordinates(e);
 
     if (activeTool === 'pen' || activeTool === 'eraser') {
@@ -326,8 +518,24 @@ const App = () => {
     }
   };
 
-  const stopDrawing = (e) => {
-    if (!isDrawing) return;
+  const handleCanvasPointerUp = (e) => {
+    // finish moving
+    if (dragAnnRef.current.active) {
+      e.preventDefault();
+      e.stopPropagation();
+      dragAnnRef.current.active = false;
+      dragAnnRef.current.index = -1;
+      dragAnnRef.current.original = null;
+      try { canvasRef.current?.releasePointerCapture(e.pointerId); } catch {}
+      return;
+    }
+
+    // finish drawing
+    if (!isDrawing) {
+      try { canvasRef.current?.releasePointerCapture(e.pointerId); } catch {}
+      return;
+    }
+
     const coords = getPdfCoordinates(e);
 
     let newAnn = null;
@@ -354,47 +562,25 @@ const App = () => {
         ...prev,
         [pageNum]: [...(prev[pageNum] || []), newAnn]
       }));
+      setSelectedIndex(-1);
     }
 
     setIsDrawing(false);
     setCurrentPath([]);
     setStartPoint(null);
     if (canvasRef.current) canvasRef.current.tempEnd = null;
+
+    try { canvasRef.current?.releasePointerCapture(e.pointerId); } catch {}
   };
 
-  // --- Arrow drawing helper ---
-  const strokeArrow = (ctx, x1, y1, x2, y2, headLenPx) => {
-    // Line
-    ctx.beginPath();
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(x2, y2);
-    ctx.stroke();
-
-    // Head
-    const angle = Math.atan2(y2 - y1, x2 - x1);
-    const a1 = angle - Math.PI / 7;
-    const a2 = angle + Math.PI / 7;
-
-    const hx1 = x2 - headLenPx * Math.cos(a1);
-    const hy1 = y2 - headLenPx * Math.sin(a1);
-    const hx2 = x2 - headLenPx * Math.cos(a2);
-    const hy2 = y2 - headLenPx * Math.sin(a2);
-
-    ctx.beginPath();
-    ctx.moveTo(x2, y2);
-    ctx.lineTo(hx1, hy1);
-    ctx.moveTo(x2, y2);
-    ctx.lineTo(hx2, hy2);
-    ctx.stroke();
-  };
-
+  // --- Draw all annotations ---
   const drawAnnotations = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    const drawItem = (ann) => {
+    const drawItem = (ann, idx) => {
       ctx.save();
 
       if (ann.type === 'eraser') ctx.globalCompositeOperation = 'destination-out';
@@ -445,11 +631,28 @@ const App = () => {
         ctx.fillText(ann.text, ann.x * scale, ann.y * scale);
       }
 
+      // selection highlight
+      if (idx === selectedIndex && activeTool === 'cursor') {
+        const bb = annBBoxPdf(ann);
+        const pad = 6;
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(37,99,235,0.9)';
+        ctx.setLineDash([6, 4]);
+        ctx.strokeRect(
+          bb.minX * scale - pad,
+          bb.minY * scale - pad,
+          (bb.maxX - bb.minX) * scale + pad * 2,
+          (bb.maxY - bb.minY) * scale + pad * 2
+        );
+        ctx.setLineDash([]);
+      }
+
       ctx.restore();
     };
 
     const pageAnns = annotations[pageNum] || [];
-    pageAnns.forEach(drawItem);
+    pageAnns.forEach((ann, idx) => drawItem(ann, idx));
 
     // Preview while drawing
     if (isDrawing) {
@@ -460,17 +663,17 @@ const App = () => {
           points: currentPath,
           color: activeTool === 'eraser' ? '#ffffff' : color,
           width: activeTool === 'eraser' ? 20 : lineWidth
-        });
+        }, -999);
       } else if (startPoint && tempEnd) {
         if (activeTool === 'line') {
-          drawItem({ type: 'line', start: startPoint, end: tempEnd, color, width: lineWidth });
+          drawItem({ type: 'line', start: startPoint, end: tempEnd, color, width: lineWidth }, -999);
         } else if (activeTool === 'arrow') {
-          drawItem({ type: 'arrow', start: startPoint, end: tempEnd, color, width: lineWidth });
+          drawItem({ type: 'arrow', start: startPoint, end: tempEnd, color, width: lineWidth }, -999);
         } else if (activeTool === 'rect') {
-          drawItem({ type: 'rect', start: startPoint, end: tempEnd, color, width: lineWidth, filled: isFilled });
+          drawItem({ type: 'rect', start: startPoint, end: tempEnd, color, width: lineWidth, filled: isFilled }, -999);
         } else if (activeTool === 'circle') {
           const r = Math.sqrt(Math.pow(tempEnd.x - startPoint.x, 2) + Math.pow(tempEnd.y - startPoint.y, 2));
-          drawItem({ type: 'circle', center: startPoint, radius: r, color, width: lineWidth, filled: isFilled });
+          drawItem({ type: 'circle', center: startPoint, radius: r, color, width: lineWidth, filled: isFilled }, -999);
         }
       }
     }
@@ -480,6 +683,7 @@ const App = () => {
     const pageAnns = annotations[pageNum] || [];
     if (pageAnns.length === 0) return;
     setAnnotations(prev => ({ ...prev, [pageNum]: pageAnns.slice(0, -1) }));
+    setSelectedIndex(-1);
   };
 
   const exportPDF = async () => {
@@ -630,7 +834,7 @@ const App = () => {
               active={activeTool === 'cursor'}
               onClick={() => setActiveTool('cursor')}
               icon={<MousePointer size={18} />}
-              label="Select / Pan (Left Click Drag)"
+              label="Select / Move (drag object) • Pan (drag empty)"
             />
             <ToolButton
               active={activeTool === 'pen'}
@@ -729,7 +933,7 @@ const App = () => {
           </button>
 
           <button
-            onClick={() => setAnnotations(prev => ({ ...prev, [pageNum]: [] }))}
+            onClick={() => { setAnnotations(prev => ({ ...prev, [pageNum]: [] })); setSelectedIndex(-1); }}
             className="p-2 hover:bg-red-50 text-red-500 rounded"
             title="Clear Page"
           >
@@ -756,11 +960,13 @@ const App = () => {
       <div
         ref={scrollContainerRef}
         className="flex-1 overflow-auto bg-gray-200 relative cursor-default"
-        onMouseDown={handleContainerMouseDown}
-        onMouseMove={handleContainerMouseMove}
-        onMouseUp={handleContainerMouseUp}
-        onMouseLeave={handleContainerMouseUp}
-        onContextMenu={handleContextMenu}
+        style={{ userSelect: 'none' }}
+        onPointerDown={handleContainerPointerDown}
+        onPointerMove={handleContainerPointerMove}
+        onPointerUp={handleContainerPointerUp}
+        onPointerCancel={handleContainerPointerUp}
+        onPointerLeave={handleContainerPointerUp}
+        onContextMenu={(e) => e.preventDefault()}
       >
         {!pdfDoc ? (
           <div className="flex flex-col items-center justify-center text-gray-400 h-full p-8">
@@ -786,15 +992,21 @@ const App = () => {
                 cursor: isPanningState ? 'grabbing' : activeTool === 'cursor' ? 'grab' : 'crosshair'
               }}
             >
-              <canvas ref={pdfCanvasRef} className="bg-white block" />
+              <canvas
+                ref={pdfCanvasRef}
+                className="bg-white block"
+                onContextMenu={(e) => e.preventDefault()}
+              />
 
               <canvas
                 ref={canvasRef}
                 className="absolute top-0 left-0"
-                onMouseDown={startDrawing}
-                onMouseMove={draw}
-                onMouseUp={stopDrawing}
-                onMouseLeave={stopDrawing}
+                onPointerDown={handleCanvasPointerDown}
+                onPointerMove={handleCanvasPointerMove}
+                onPointerUp={handleCanvasPointerUp}
+                onPointerCancel={handleCanvasPointerUp}
+                onPointerLeave={handleCanvasPointerUp}
+                onContextMenu={(e) => e.preventDefault()}
               />
 
               {/* Text Input Overlay */}
@@ -819,7 +1031,8 @@ const App = () => {
                       lineHeight: 1.2
                     }}
                     placeholder="Type… (Enter to save)"
-                    onMouseDown={(e) => e.stopPropagation()}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onContextMenu={(e) => e.preventDefault()}
                   />
                 </div>
               )}
