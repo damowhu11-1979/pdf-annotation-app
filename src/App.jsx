@@ -1,833 +1,635 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react'
 import {
-  Upload, Download, Pen, Minus, Type, ChevronLeft, ChevronRight,
-  RotateCcw, Trash2, Save, MousePointer, ZoomIn, ZoomOut,
-  Square, Circle, Eraser, PaintBucket, Copy, Hand
-} from 'lucide-react';
+  Upload, Pen, Minus, Type, ChevronLeft, ChevronRight, RotateCcw, Trash2,
+  Save, MousePointer, ZoomIn, ZoomOut, Square, Circle, Eraser, PaintBucket,
+  Copy
+} from 'lucide-react'
 
-// External libraries
+// External libs (CDN)
 const PDFJS_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
 const PDFJS_WORKER_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 const JSPDF_URL = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
 
-const App = () => {
-  const [pdfLib, setPdfLib] = useState(null);
-  const [jspdfLib, setJspdfLib] = useState(null);
-  const [pdfDoc, setPdfDoc] = useState(null);
-  const [pageNum, setPageNum] = useState(1);
-  const [scale, setScale] = useState(1.5);
-  const [fileName, setFileName] = useState("document.pdf");
+/** hit testing helpers */
+const near = (a, b, tol = 6) => Math.abs(a - b) <= tol
+const pointInRect = (p, a, b) => {
+  const x1 = Math.min(a.x, b.x), x2 = Math.max(a.x, b.x)
+  const y1 = Math.min(a.y, b.y), y2 = Math.max(a.y, b.y)
+  return p.x >= x1 && p.x <= x2 && p.y >= y1 && p.y <= y2
+}
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y)
 
-  // Tools: 'cursor', 'hand', 'pen', 'line', 'rect', 'circle', 'text', 'eraser'
-  const [activeTool, setActiveTool] = useState('cursor');
-  const [color, setColor] = useState('#EF4444');
-  const [lineWidth, setLineWidth] = useState(3);
-  const [isFilled, setIsFilled] = useState(false);
+export default function App() {
+  const [pdfLib, setPdfLib] = useState(null)
+  const [jspdfLib, setJspdfLib] = useState(null)
+  const [pdfDoc, setPdfDoc] = useState(null)
+  const [pageNum, setPageNum] = useState(1)
+  const [scale, setScale] = useState(1.5)
+  const [fileName, setFileName] = useState('document.pdf')
 
-  // Annotations store
-  const [annotations, setAnnotations] = useState({});
+  // Tools: select, pen, line, rect, circle, text, eraser, hand (pan)
+  const [activeTool, setActiveTool] = useState('select')
+  const [color, setColor] = useState('#EF4444')
+  const [lineWidth, setLineWidth] = useState(3)
+  const [isFilled, setIsFilled] = useState(false)
 
-  // Drawing state
-  const [isDrawing, setIsDrawing] = useState(false);
-  const [currentPath, setCurrentPath] = useState([]);
-  const [startPoint, setStartPoint] = useState(null);
-  const [textInput, setTextInput] = useState(null);
+  // data
+  const [annotations, setAnnotations] = useState({})
+  const [selected, setSelected] = useState({ page: null, index: null }) // selected ann
 
-  // Selection & moving
-  const [selected, setSelected] = useState({ page: null, index: -1 });
-  const [dragging, setDragging] = useState(false);
-  const dragStartRef = useRef(null);
+  // drawing state
+  const [isDrawing, setIsDrawing] = useState(false)
+  const [currentPath, setCurrentPath] = useState([])
+  const [startPoint, setStartPoint] = useState(null)
+  const [textInput, setTextInput] = useState(null)
 
-  const [spacePanning, setSpacePanning] = useState(false);
+  // selection/move state
+  const draggingSel = useRef(false)
+  const dragStartPDF = useRef(null)
 
-  const canvasRef = useRef(null);
-  const pdfCanvasRef = useRef(null);
-  const fileInputRef = useRef(null);
-  const scrollContainerRef = useRef(null);
-  const renderTaskRef = useRef(null);
-  const renderRequestRef = useRef(0);
+  // refs
+  const pdfCanvasRef = useRef(null)
+  const drawCanvasRef = useRef(null)
+  const fileInputRef = useRef(null)
+  const scrollRef = useRef(null)
+  const renderTaskRef = useRef(null)
+  const renderReqId = useRef(0)
 
-  // Panning
-  const isPanning = useRef(false);
-  const startPan = useRef({ x: 0, y: 0 });
+  // panning
+  const isPanning = useRef(false)
+  const panPt = useRef({ x: 0, y: 0 })
 
-  // Load Libraries
+  /** load libraries */
   useEffect(() => {
-    const loadLibs = async () => {
-      try {
-        if (!window.pdfjsLib) {
-          const script1 = document.createElement('script');
-          script1.src = PDFJS_URL;
-          script1.crossOrigin = 'anonymous';
-          script1.onload = () => {
-            window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
-            setPdfLib(window.pdfjsLib);
-          };
-          document.head.appendChild(script1);
-        } else {
-          setPdfLib(window.pdfjsLib);
+    const go = async () => {
+      if (!window.pdfjsLib) {
+        const s = document.createElement('script')
+        s.src = PDFJS_URL
+        s.crossOrigin = 'anonymous'
+        s.onload = () => {
+          window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL
+          setPdfLib(window.pdfjsLib)
         }
+        document.head.appendChild(s)
+      } else setPdfLib(window.pdfjsLib)
 
-        if (!window.jspdf) {
-          const script2 = document.createElement('script');
-          script2.src = JSPDF_URL;
-          script2.crossOrigin = 'anonymous';
-          script2.onload = () => setJspdfLib(window.jspdf);
-          document.head.appendChild(script2);
-        } else {
-          setJspdfLib(window.jspdf);
-        }
-      } catch (e) {
-        console.error("Failed to load libraries", e);
-      }
-    };
-    loadLibs();
-  }, []);
+      if (!window.jspdf) {
+        const s2 = document.createElement('script')
+        s2.src = JSPDF_URL
+        s2.crossOrigin = 'anonymous'
+        s2.onload = () => setJspdfLib(window.jspdf)
+        document.head.appendChild(s2)
+      } else setJspdfLib(window.jspdf)
+    }
+    go()
+  }, [])
 
-  // Handle File Upload
-  const handleFileUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file || !pdfLib) return;
-
-    setFileName(file.name);
-    const reader = new FileReader();
-    reader.onload = async (ev) => {
-      const typedarray = new Uint8Array(ev.target.result);
+  /** upload PDF */
+  const handleFileUpload = (e) => {
+    const file = e.target.files?.[0]
+    if (!file || !pdfLib) return
+    setFileName(file.name)
+    const r = new FileReader()
+    r.onload = async (ev) => {
       try {
-        const loadingTask = pdfLib.getDocument(typedarray);
-        const pdf = await loadingTask.promise;
-        setPdfDoc(pdf);
-        setPageNum(1);
-        setAnnotations({});
-        setSelected({ page: null, index: -1 });
-      } catch (error) {
-        console.error('Error loading PDF:', error);
-        alert('Error parsing PDF. Please try another file.');
+        const task = pdfLib.getDocument(new Uint8Array(ev.target.result))
+        const pdf = await task.promise
+        setPdfDoc(pdf)
+        setPageNum(1)
+        setAnnotations({})
+        setSelected({ page: null, index: null })
+      } catch (err) {
+        console.error(err)
+        alert('Failed to load PDF. Try another file.')
       }
-    };
-    reader.readAsArrayBuffer(file);
-  };
+    }
+    r.readAsArrayBuffer(file)
+  }
 
-  // Render Page
-  useEffect(() => { if (pdfDoc) renderPage(pageNum); }, [pdfDoc, pageNum, scale, pdfLib]);
-  useEffect(() => { drawAnnotations(); }, [annotations, pageNum, scale, currentPath, startPoint, isFilled, selected, dragging]);
-
-  // Keyboard: space for panning, Ctrl/Cmd + D for duplicate
+  /** wheel zoom (needs passive:false) */
   useEffect(() => {
-    const onKeyDown = (e) => {
-      if (e.code === 'Space') {
-        e.preventDefault();
-        setSpacePanning(true);
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') {
-        e.preventDefault();
-        duplicateSelected();
-      }
-    };
-    const onKeyUp = (e) => {
-      if (e.code === 'Space') setSpacePanning(false);
-    };
-    window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
-    };
-  }, [selected, annotations, pageNum]);
-
-  // Wheel: zoom only when Ctrl is held; otherwise allow natural scroll for panning
-  useEffect(() => {
-    const container = scrollContainerRef.current;
-    if (!container) return;
-
-    const handleWheel = (e) => {
+    const el = scrollRef.current
+    if (!el) return
+    const onWheel = (e) => {
+      e.preventDefault()
       if (e.ctrlKey) {
-        e.preventDefault();
-        const delta = -e.deltaY;
-        const step = delta * 0.002;
-        setScale((s) => Math.min(5, Math.max(0.5, s + step)));
-      }
-      // If not ctrlKey, do NOT preventDefault -> native scroll pans to the extremes
-    };
-
-    container.addEventListener('wheel', handleWheel, { passive: false });
-    return () => container.removeEventListener('wheel', handleWheel);
-  }, []);
-
-  const renderPage = async (num) => {
-    if (!pdfDoc) return;
-    renderRequestRef.current++;
-    const requestId = renderRequestRef.current;
-
-    if (renderTaskRef.current) {
-      try { await renderTaskRef.current.cancel(); } catch {}
-    }
-
-    try {
-      const page = await pdfDoc.getPage(num);
-      if (renderRequestRef.current !== requestId) return;
-
-      const viewport = page.getViewport({ scale });
-      const pdfCanvas = pdfCanvasRef.current;
-      const drawCanvas = canvasRef.current;
-
-      if (pdfCanvas && drawCanvas) {
-        pdfCanvas.height = viewport.height;
-        pdfCanvas.width = viewport.width;
-        drawCanvas.height = viewport.height;
-        drawCanvas.width = viewport.width;
-
-        const renderContext = { canvasContext: pdfCanvas.getContext('2d'), viewport };
-        if (renderTaskRef.current) { try { await renderTaskRef.current.cancel(); } catch {} }
-        const renderTask = page.render(renderContext);
-        renderTaskRef.current = renderTask;
-        await renderTask.promise;
-
-        if (renderRequestRef.current === requestId) {
-          renderTaskRef.current = null;
-          drawAnnotations();
-        }
-      }
-    } catch (error) {
-      if (error?.name !== 'RenderingCancelledException') console.error('Error rendering page:', error);
-    }
-  };
-
-  // --- Geometry helpers (for hit-testing & moving) ---
-  const pointDistanceToSegment = (px, py, x1, y1, x2, y2) => {
-    const A = px - x1, B = py - y1, C = x2 - x1, D = y2 - y1;
-    const dot = A * C + B * D;
-    const lenSq = C * C + D * D;
-    let t = lenSq ? dot / lenSq : -1;
-    t = Math.max(0, Math.min(1, t));
-    const nx = x1 + t * C, ny = y1 + t * D;
-    return Math.hypot(px - nx, py - ny);
-  };
-  const insideRect = (x, y, r) => {
-    const minX = Math.min(r.start.x, r.end.x);
-    const maxX = Math.max(r.start.x, r.end.x);
-    const minY = Math.min(r.start.y, r.end.y);
-    const maxY = Math.max(r.start.y, r.end.y);
-    return x >= minX && x <= maxX && y >= minY && y <= maxY;
-  };
-  const bboxOfPen = (pts) => {
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    pts.forEach(p => { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); });
-    return { minX, minY, maxX, maxY };
-  };
-
-  // --- Pan Logic (middle/right, Hand tool, or Space+left) ---
-  const beginPanIfNeeded = (e) => {
-    const wantPan = (activeTool === 'hand') || spacePanning || e.button === 1 || e.button === 2;
-    if (wantPan) {
-      e.preventDefault();
-      isPanning.current = true;
-      startPan.current = { x: e.clientX, y: e.clientY };
-      return true;
-    }
-    return false;
-  };
-
-  const handleContainerMouseDown = (e) => {
-    if (beginPanIfNeeded(e)) return;
-  };
-  const handleContainerMouseMove = (e) => {
-    if (isPanning.current && scrollContainerRef.current) {
-      e.preventDefault();
-      const dx = e.clientX - startPan.current.x;
-      const dy = e.clientY - startPan.current.y;
-      scrollContainerRef.current.scrollLeft -= dx;
-      scrollContainerRef.current.scrollTop -= dy;
-      startPan.current = { x: e.clientX, y: e.clientY };
-    }
-  };
-  const handleContainerMouseUp = () => { isPanning.current = false; };
-  const handleContextMenu = (e) => e.preventDefault();
-
-  // --- Drawing OR Selecting/Moving ---
-  const getPdfCoordinates = (e) => {
-    const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const canvasX = (e.clientX - rect.left) * scaleX;
-    const canvasY = (e.clientY - rect.top) * scaleY;
-    return { x: canvasX / scale, y: canvasY / scale };
-  };
-
-  const hitTestAt = (p) => {
-    const pageAnns = annotations[pageNum] || [];
-    const padding = 6 / scale;
-    for (let i = pageAnns.length - 1; i >= 0; i--) {
-      const ann = pageAnns[i];
-      if (ann.type === 'rect') {
-        if (ann.filled ? insideRect(p.x, p.y, ann)
-          : insideRect(p.x, p.y, ann) &&
-            (Math.abs(p.x - ann.start.x) <= padding || Math.abs(p.x - ann.end.x) <= padding ||
-             Math.abs(p.y - ann.start.y) <= padding || Math.abs(p.y - ann.end.y) <= padding)) return i;
-      } else if (ann.type === 'circle') {
-        const d = Math.hypot(p.x - ann.center.x, p.y - ann.center.y);
-        if (ann.filled ? d <= ann.radius + padding : Math.abs(d - ann.radius) <= padding) return i;
-      } else if (ann.type === 'line') {
-        if (pointDistanceToSegment(p.x, p.y, ann.start.x, ann.start.y, ann.end.x, ann.end.y) <= padding) return i;
-      } else if (ann.type === 'pen' || ann.type === 'eraser') {
-        for (let k = 0; k < ann.points.length - 1; k++) {
-          const a = ann.points[k], b = ann.points[k + 1];
-          if (pointDistanceToSegment(p.x, p.y, a.x, a.y, b.x, b.y) <= padding) return i;
-        }
-        const bb = bboxOfPen(ann.points);
-        if (p.x >= bb.minX - padding && p.x <= bb.maxX + padding && p.y >= bb.minY - padding && p.y <= bb.maxY + padding) return i;
-      } else if (ann.type === 'text') {
-        const approxW = (ann.size * 0.6) * (ann.text?.length || 1) / 1; // already in pdf units
-        const approxH = ann.size;
-        if (p.x >= ann.x && p.x <= ann.x + approxW && p.y >= ann.y && p.y <= ann.y + approxH) return i;
-      }
-    }
-    return -1;
-  };
-
-  const startDrawing = (e) => {
-    if (e.button !== 0) return;
-
-    // Pan with left mouse if Hand tool or Space pressed
-    if (activeTool === 'hand' || spacePanning) {
-      beginPanIfNeeded({ ...e, button: 1 }); // treat as pan
-      return;
-    }
-
-    // MOVE/SELECT mode with cursor
-    if (activeTool === 'cursor') {
-      if (isPanning.current) return;
-      const p = getPdfCoordinates(e);
-      const idx = hitTestAt(p);
-      if (idx !== -1) {
-        setSelected({ page: pageNum, index: idx });
-        setDragging(true);
-        dragStartRef.current = { p0: p };
+        const delta = -e.deltaY
+        setScale(s => Math.min(5, Math.max(0.5, s + delta * 0.002)))
       } else {
-        setSelected({ page: null, index: -1 });
+        const delta = -e.deltaY
+        const step = 0.1
+        setScale(s => Math.min(4, Math.max(0.25, s + (delta > 0 ? step : -step))))
       }
-      return;
     }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [])
 
-    // Drawing modes
-    if (activeTool === 'text') {
-      const coords = getPdfCoordinates(e);
-      if (!textInput) setTextInput({ x: coords.x, y: coords.y, text: '' });
-      return;
+  /** render page */
+  useEffect(() => { if (pdfDoc) renderPage(pageNum) }, [pdfDoc, pageNum, scale])
+  const renderPage = async (n) => {
+    renderReqId.current++
+    const req = renderReqId.current
+    if (renderTaskRef.current) { try { await renderTaskRef.current.cancel() } catch {} }
+    try {
+      const page = await pdfDoc.getPage(n)
+      if (renderReqId.current !== req) return
+      const viewport = page.getViewport({ scale })
+      const pcan = pdfCanvasRef.current
+      const dcan = drawCanvasRef.current
+      if (!pcan || !dcan) return
+      pcan.width = dcan.width = viewport.width
+      pcan.height = dcan.height = viewport.height
+      const ctx = pcan.getContext('2d')
+      const task = page.render({ canvasContext: ctx, viewport })
+      renderTaskRef.current = task
+      await task.promise
+      if (renderReqId.current === req) {
+        renderTaskRef.current = null
+        drawAnnotations()
+      }
+    } catch (e) {
+      if (e?.name !== 'RenderingCancelledException') console.error(e)
     }
+  }
 
-    const coords = getPdfCoordinates(e);
-    setIsDrawing(true);
-    setStartPoint(coords);
-    if (activeTool === 'pen' || activeTool === 'eraser') setCurrentPath([coords]);
-  };
-
-  const draw = (e) => {
-    const coords = getPdfCoordinates(e);
-
-    // Dragging selected
-    if (dragging && selected.page === pageNum && selected.index > -1) {
-      const { p0 } = dragStartRef.current || { p0: coords };
-      const dx = coords.x - p0.x;
-      const dy = coords.y - p0.y;
-      dragStartRef.current = { p0: coords };
-
-      setAnnotations(prev => {
-        const copy = { ...prev };
-        const arr = [...(copy[pageNum] || [])];
-        const ann = { ...arr[selected.index] };
-
-        if (ann.type === 'line') {
-          ann.start = { x: ann.start.x + dx, y: ann.start.y + dy };
-          ann.end = { x: ann.end.x + dx, y: ann.end.y + dy };
-        } else if (ann.type === 'rect') {
-          ann.start = { x: ann.start.x + dx, y: ann.start.y + dy };
-          ann.end   = { x: ann.end.x + dx, y: ann.end.y + dy };
-        } else if (ann.type === 'circle') {
-          ann.center = { x: ann.center.x + dx, y: ann.center.y + dy };
-        } else if (ann.type === 'pen' || ann.type === 'eraser') {
-          ann.points = ann.points.map(pt => ({ x: pt.x + dx, y: pt.y + dy }));
-        } else if (ann.type === 'text') {
-          ann.x += dx; ann.y += dy;
-        }
-
-        arr[selected.index] = ann;
-        copy[pageNum] = arr;
-        return copy;
-      });
-
-      return;
-    }
-
-    // Draw new content
-    if (!isDrawing) return;
-    if (activeTool === 'pen' || activeTool === 'eraser') {
-      setCurrentPath(prev => [...prev, coords]);
-    } else if (['line', 'rect', 'circle'].includes(activeTool)) {
-      canvasRef.current.tempEnd = coords;
-      drawAnnotations();
-    }
-  };
-
-  const stopDrawing = () => {
-    // End pan
-    if (isPanning.current) {
-      isPanning.current = false;
-      return;
-    }
-
-    // End move
-    if (dragging) {
-      setDragging(false);
-      dragStartRef.current = null;
-      return;
-    }
-
-    if (!isDrawing) return;
-    const tempEnd = canvasRef.current?.tempEnd || null;
-
-    const pageAnns = annotations[pageNum] || [];
-    let newAnn = null;
-    const baseProps = { color: activeTool === 'eraser' ? '#ffffff' : color, width: activeTool === 'eraser' ? 20 : lineWidth };
-
-    if (activeTool === 'pen' || activeTool === 'eraser') {
-      newAnn = { ...baseProps, type: activeTool, points: currentPath };
-    } else if (activeTool === 'line' && startPoint && tempEnd) {
-      newAnn = { ...baseProps, type: 'line', start: startPoint, end: tempEnd };
-    } else if (activeTool === 'rect' && startPoint && tempEnd) {
-      newAnn = { ...baseProps, type: 'rect', start: startPoint, end: tempEnd, filled: isFilled };
-    } else if (activeTool === 'circle' && startPoint && tempEnd) {
-      const r = Math.hypot(tempEnd.x - startPoint.x, tempEnd.y - startPoint.y);
-      newAnn = { ...baseProps, type: 'circle', center: startPoint, radius: r, filled: isFilled };
-    }
-
-    if (newAnn) setAnnotations({ ...annotations, [pageNum]: [...pageAnns, newAnn] });
-
-    setIsDrawing(false);
-    setCurrentPath([]);
-    setStartPoint(null);
-    if (canvasRef.current) canvasRef.current.tempEnd = null;
-  };
-
-  const handleTextSubmit = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      finalizeText();
-    }
-  };
-
-  const finalizeText = () => {
-    if (!textInput) return;
-    if (!textInput.text.trim()) { setTextInput(null); return; }
-
-    const pageAnns = annotations[pageNum] || [];
-    const newAnn = { type: 'text', x: textInput.x, y: textInput.y, text: textInput.text, color, size: 16 };
-    setAnnotations({ ...annotations, [pageNum]: [...pageAnns, newAnn] });
-    setTextInput(null);
-  };
-
-  // Duplicate selected (or last) annotation
-  const duplicateSelected = () => {
-    const pageAnns = annotations[pageNum] || [];
-    if (pageAnns.length === 0) return;
-
-    let idx = selected.index;
-    if (idx < 0) idx = pageAnns.length - 1;
-
-    const src = pageAnns[idx];
-    if (!src) return;
-
-    const clone = JSON.parse(JSON.stringify(src));
-    const OFFSET = 10; // pts
-
-    if (clone.type === 'line') {
-      clone.start.x += OFFSET; clone.start.y += OFFSET;
-      clone.end.x   += OFFSET; clone.end.y   += OFFSET;
-    } else if (clone.type === 'rect') {
-      clone.start.x += OFFSET; clone.start.y += OFFSET;
-      clone.end.x   += OFFSET; clone.end.y   += OFFSET;
-    } else if (clone.type === 'circle') {
-      clone.center.x += OFFSET; clone.center.y += OFFSET;
-    } else if (clone.type === 'pen' || clone.type === 'eraser') {
-      clone.points = clone.points.map(p => ({ x: p.x + OFFSET, y: p.y + OFFSET }));
-    } else if (clone.type === 'text') {
-      clone.x += OFFSET; clone.y += OFFSET;
-    }
-
-    const newIndex = pageAnns.length;
-    setAnnotations({ ...annotations, [pageNum]: [...pageAnns, clone] });
-    setSelected({ page: pageNum, index: newIndex });
-  };
-
+  /** draw all annotations + selection */
+  useEffect(() => { drawAnnotations() }, [annotations, pageNum, scale, isDrawing, startPoint, isFilled, color, lineWidth, selected])
   const drawAnnotations = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const can = drawCanvasRef.current
+    if (!can) return
+    const ctx = can.getContext('2d')
+    ctx.clearRect(0, 0, can.width, can.height)
 
-    const drawItem = (ann, i) => {
-      ctx.save();
-      ctx.globalCompositeOperation = ann.type === 'eraser' ? 'destination-out' : 'source-over';
-      ctx.strokeStyle = ann.color;
-      ctx.lineWidth = ann.width * scale;
-      ctx.fillStyle = ann.color;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
+    const drawOne = (ann, sel = false) => {
+      ctx.save()
+      ctx.globalCompositeOperation = ann.type === 'eraser' ? 'destination-out' : 'source-over'
+      ctx.strokeStyle = ann.color
+      ctx.lineWidth = (ann.width || 2) * scale
+      ctx.fillStyle = ann.color
+      ctx.lineCap = 'round'
+      ctx.lineJoin = 'round'
 
       if (ann.type === 'pen' || ann.type === 'eraser') {
-        ctx.beginPath();
-        if (ann.points.length > 0) {
-          ctx.moveTo(ann.points[0].x * scale, ann.points[0].y * scale);
-          ann.points.forEach(p => ctx.lineTo(p.x * scale, p.y * scale));
+        ctx.beginPath()
+        if (ann.points.length) {
+          ctx.moveTo(ann.points[0].x * scale, ann.points[0].y * scale)
+          ann.points.forEach(p => ctx.lineTo(p.x * scale, p.y * scale))
         }
-        ctx.stroke();
+        ctx.stroke()
       } else if (ann.type === 'line') {
-        ctx.beginPath();
-        ctx.moveTo(ann.start.x * scale, ann.start.y * scale);
-        ctx.lineTo(ann.end.x * scale, ann.end.y * scale);
-        ctx.stroke();
+        ctx.beginPath()
+        ctx.moveTo(ann.start.x * scale, ann.start.y * scale)
+        ctx.lineTo(ann.end.x * scale, ann.end.y * scale)
+        ctx.stroke()
       } else if (ann.type === 'rect') {
-        const x = ann.start.x * scale;
-        const y = ann.start.y * scale;
-        const w = (ann.end.x - ann.start.x) * scale;
-        const h = (ann.end.y - ann.start.y) * scale;
-        ctx.beginPath();
-        ctx.rect(x, y, w, h);
-        if (ann.filled) ctx.fill();
-        ctx.stroke();
+        const x = ann.start.x * scale, y = ann.start.y * scale
+        const w = (ann.end.x - ann.start.x) * scale, h = (ann.end.y - ann.start.y) * scale
+        ctx.beginPath()
+        ctx.rect(x, y, w, h)
+        if (ann.filled) ctx.fill()
+        ctx.stroke()
       } else if (ann.type === 'circle') {
-        ctx.beginPath();
-        ctx.arc(ann.center.x * scale, ann.center.y * scale, ann.radius * scale, 0, 2 * Math.PI);
-        if (ann.filled) ctx.fill();
-        ctx.stroke();
+        ctx.beginPath()
+        ctx.arc(ann.center.x * scale, ann.center.y * scale, ann.radius * scale, 0, Math.PI * 2)
+        if (ann.filled) ctx.fill()
+        ctx.stroke()
       } else if (ann.type === 'text') {
-        ctx.font = `${ann.size * scale}px sans-serif`;
-        ctx.textBaseline = 'top';
-        ctx.fillText(ann.text, ann.x * scale, ann.y * scale);
+        ctx.font = `${ann.size * scale}px sans-serif`
+        ctx.textBaseline = 'top'
+        ctx.fillText(ann.text, ann.x * scale, ann.y * scale)
       }
-      ctx.restore();
 
       // selection highlight
-      if (selected.page === pageNum && selected.index === i) {
-        ctx.save();
-        ctx.setLineDash([4, 4]);
-        ctx.lineWidth = 1;
-        ctx.strokeStyle = 'rgba(0,0,255,0.6)';
-
-        if (ann.type === 'rect') {
-          const x = ann.start.x * scale;
-          const y = ann.start.y * scale;
-          const w = (ann.end.x - ann.start.x) * scale;
-          const h = (ann.end.y - ann.start.y) * scale;
-          ctx.strokeRect(x - 3, y - 3, w + 6, h + 6);
-        } else if (ann.type === 'circle') {
-          ctx.beginPath();
-          ctx.arc(ann.center.x * scale, ann.center.y * scale, Math.max(8, ann.radius * scale + 6), 0, 2 * Math.PI);
-          ctx.stroke();
-        } else if (ann.type === 'line') {
-          ctx.beginPath();
-          ctx.moveTo(ann.start.x * scale, ann.start.y * scale);
-          ctx.lineTo(ann.end.x * scale, ann.end.y * scale);
-          ctx.stroke();
-        } else if (ann.type === 'pen' || ann.type === 'eraser') {
-          const bb = bboxOfPen(ann.points);
-          ctx.strokeRect(bb.minX * scale - 3, bb.minY * scale - 3, (bb.maxX - bb.minX) * scale + 6, (bb.maxY - bb.minY) * scale + 6);
-        } else if (ann.type === 'text') {
-          const approxW = (ann.size * 0.6) * (ann.text?.length || 1);
-          const approxH = ann.size;
-          ctx.strokeRect(ann.x * scale - 3, ann.y * scale - 3, approxW + 6, approxH + 6);
-        }
-        ctx.restore();
+      if (sel) {
+        ctx.strokeStyle = '#1d4ed8'
+        ctx.lineWidth = 1.5
+        ctx.setLineDash([4, 4])
+        const bb = getAnnBounds(ann)
+        ctx.strokeRect(bb.x * scale, bb.y * scale, bb.w * scale, bb.h * scale)
       }
-    };
+      ctx.restore()
+    }
 
-    (annotations[pageNum] || []).forEach((ann, i) => drawItem(ann, i));
+    const list = annotations[pageNum] || []
+    list.forEach((ann, i) =>
+      drawOne(ann, selected.page === pageNum && selected.index === i)
+    )
 
+    // preview shapes while drawing
     if (isDrawing) {
-      const tempEnd = canvas.tempEnd;
-      const preview = (ann) => drawItem(ann, -1);
-      if (activeTool === 'pen' || activeTool === 'eraser') {
-        preview({ type: activeTool, points: currentPath, color: activeTool === 'eraser' ? '#ffffff' : color, width: activeTool === 'eraser' ? 20 : lineWidth });
-      } else if (startPoint && tempEnd) {
-        if (activeTool === 'line') preview({ type: 'line', start: startPoint, end: tempEnd, color, width: lineWidth });
-        if (activeTool === 'rect') preview({ type: 'rect', start: startPoint, end: tempEnd, color, width: lineWidth, filled: isFilled });
-        if (activeTool === 'circle') {
-          const r = Math.hypot(tempEnd.x - startPoint.x, tempEnd.y - startPoint.y);
-          preview({ type: 'circle', center: startPoint, radius: r, color, width: lineWidth, filled: isFilled });
+      const te = can.tempEnd
+      if (!te) return
+      const base = { color, width: lineWidth, filled: isFilled }
+      if (activeTool === 'line' && startPoint) drawOne({ ...base, type: 'line', start: startPoint, end: te })
+      if (activeTool === 'rect' && startPoint) drawOne({ ...base, type: 'rect', start: startPoint, end: te })
+      if (activeTool === 'circle' && startPoint) {
+        const r = dist(startPoint, te)
+        drawOne({ ...base, type: 'circle', center: startPoint, radius: r })
+      }
+      if (activeTool === 'pen') drawOne({ ...base, type: 'pen', points: currentPath })
+    }
+  }
+
+  /** get bounding box used for selection */
+  const getAnnBounds = (ann) => {
+    if (ann.type === 'pen' || ann.type === 'eraser') {
+      const xs = ann.points.map(p => p.x), ys = ann.points.map(p => p.y)
+      const x = Math.min(...xs), y = Math.min(...ys)
+      const w = Math.max(...xs) - x, h = Math.max(...ys) - y
+      return { x, y, w, h }
+    } else if (ann.type === 'line') {
+      const x = Math.min(ann.start.x, ann.end.x)
+      const y = Math.min(ann.start.y, ann.end.y)
+      const w = Math.abs(ann.end.x - ann.start.x)
+      const h = Math.abs(ann.end.y - ann.start.y)
+      return { x, y, w, h }
+    } else if (ann.type === 'rect') {
+      const x = Math.min(ann.start.x, ann.end.x)
+      const y = Math.min(ann.start.y, ann.end.y)
+      const w = Math.abs(ann.end.x - ann.start.x)
+      const h = Math.abs(ann.end.y - ann.start.y)
+      return { x, y, w, h }
+    } else if (ann.type === 'circle') {
+      return { x: ann.center.x - ann.radius, y: ann.center.y - ann.radius, w: 2 * ann.radius, h: 2 * ann.radius }
+    } else if (ann.type === 'text') {
+      // approximate text box
+      return { x: ann.x, y: ann.y, w: ann.text.length * (ann.size * 0.6), h: ann.size }
+    }
+    return { x: 0, y: 0, w: 0, h: 0 }
+  }
+
+  /** hit test for selection (pdf coords) */
+  const hitTest = (pt) => {
+    const list = annotations[pageNum] || []
+    for (let i = list.length - 1; i >= 0; i--) {
+      const ann = list[i]
+      if (ann.type === 'line') {
+        // distance to segment
+        const A = ann.start, B = ann.end
+        const AB = { x: B.x - A.x, y: B.y - A.y }
+        const AP = { x: pt.x - A.x, y: pt.y - A.y }
+        const t = Math.max(0, Math.min(1, (AP.x * AB.x + AP.y * AB.y) / (AB.x * AB.x + AB.y * AB.y)))
+        const proj = { x: A.x + t * AB.x, y: A.y + t * AB.y }
+        if (dist(proj, pt) <= (8 / scale)) return i
+      } else if (ann.type === 'pen' || ann.type === 'eraser') {
+        for (let k = 0; k < ann.points.length - 1; k++) {
+          const A = ann.points[k], B = ann.points[k + 1]
+          const AB = { x: B.x - A.x, y: B.y - A.y }
+          const AP = { x: pt.x - A.x, y: pt.y - A.y }
+          const t = Math.max(0, Math.min(1, (AP.x * AB.x + AP.y * AB.y) / (AB.x * AB.x + AB.y * AB.y)))
+          const proj = { x: A.x + t * AB.x, y: A.y + t * AB.y }
+          if (dist(proj, pt) <= (8 / scale)) return i
         }
+      } else if (ann.type === 'rect') {
+        const inside = pointInRect(pt, ann.start, ann.end)
+        if (inside || near(pt.x, ann.start.x, 6 / scale) || near(pt.x, ann.end.x, 6 / scale)) return i
+      } else if (ann.type === 'circle') {
+        const d = dist(pt, ann.center)
+        if (Math.abs(d - ann.radius) <= (8 / scale) || d < ann.radius) return i
+      } else if (ann.type === 'text') {
+        const bb = getAnnBounds(ann)
+        if (pt.x >= bb.x && pt.x <= bb.x + bb.w && pt.y >= bb.y && pt.y <= bb.y + bb.h) return i
       }
     }
-  };
+    return -1
+  }
 
-  const undoLast = () => {
-    const pageAnns = annotations[pageNum] || [];
-    if (pageAnns.length === 0) return;
-    setAnnotations({ ...annotations, [pageNum]: pageAnns.slice(0, -1) });
-    setSelected({ page: null, index: -1 });
-  };
+  /** coords helpers */
+  const toPdfCoords = (e) => {
+    const can = drawCanvasRef.current
+    const r = can.getBoundingClientRect()
+    const sx = can.width / r.width, sy = can.height / r.height
+    const x = (e.clientX - r.left) * sx, y = (e.clientY - r.top) * sy
+    return { x: x / scale, y: y / scale }
+  }
 
-  // Smart Fill toggle (also updates last rect/circle immediately)
-  const toggleFill = () => {
-    setIsFilled(prev => {
-      const next = !prev;
-
-      setAnnotations(prevAnns => {
-        const pageAnns = prevAnns[pageNum] || [];
-        if (pageAnns.length === 0) return prevAnns;
-
-        const lastIndex = pageAnns.length - 1;
-        const last = pageAnns[lastIndex];
-
-        if (last?.type === 'rect' || last?.type === 'circle') {
-          const updated = [...pageAnns];
-          updated[lastIndex] = { ...last, filled: next };
-          return { ...prevAnns, [pageNum]: updated };
-        }
-        return prevAnns;
-      });
-
-      return next;
-    });
-  };
-
-  const exportPDF = async () => {
-    if (!pdfDoc || !jspdfLib) return;
-    const { jsPDF } = jspdfLib;
-
-    const doc = new jsPDF({ orientation: 'p', unit: 'pt', format: 'a4', putOnlyUsedFonts: true });
-    doc.deletePage(1);
-    const totalPages = pdfDoc.numPages;
-    const exportScale = 2.0;
-
-    for (let i = 1; i <= totalPages; i++) {
-      const page = await pdfDoc.getPage(i);
-      const originalViewport = page.getViewport({ scale: 1.0 });
-      doc.addPage([originalViewport.width, originalViewport.height], originalViewport.width > originalViewport.height ? 'l' : 'p');
-
-      const viewport = page.getViewport({ scale: exportScale });
-      const canvas = document.createElement('canvas');
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      const ctx = canvas.getContext('2d');
-      await page.render({ canvasContext: ctx, viewport }).promise;
-
-      (annotations[i] || []).forEach(ann => {
-        ctx.save();
-        ctx.globalCompositeOperation = ann.type === 'eraser' ? 'destination-out' : 'source-over';
-        ctx.strokeStyle = ann.color;
-        ctx.lineWidth = ann.width * exportScale;
-        ctx.fillStyle = ann.color;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        const s = exportScale;
-
-        if (ann.type === 'pen' || ann.type === 'eraser') {
-          ctx.beginPath();
-          if (ann.points.length > 0) {
-            ctx.moveTo(ann.points[0].x * s, ann.points[0].y * s);
-            ann.points.forEach(p => ctx.lineTo(p.x * s, p.y * s));
-          }
-          ctx.stroke();
-        } else if (ann.type === 'line') {
-          ctx.beginPath();
-          ctx.moveTo(ann.start.x * s, ann.start.y * s);
-          ctx.lineTo(ann.end.x * s, ann.end.y * s);
-          ctx.stroke();
-        } else if (ann.type === 'rect') {
-          const rx = ann.start.x * s, ry = ann.start.y * s;
-          const rw = (ann.end.x - ann.start.x) * s, rh = (ann.end.y - ann.start.y) * s;
-          ctx.beginPath();
-          ctx.rect(rx, ry, rw, rh);
-          if (ann.filled) ctx.fill();
-          ctx.stroke();
-        } else if (ann.type === 'circle') {
-          ctx.beginPath();
-          ctx.arc(ann.center.x * s, ann.center.y * s, ann.radius * s, 0, 2 * Math.PI);
-          if (ann.filled) ctx.fill();
-          ctx.stroke();
-        } else if (ann.type === 'text') {
-          ctx.font = `${ann.size * s}px sans-serif`;
-          ctx.textBaseline = 'top';
-          ctx.fillText(ann.text, ann.x * s, ann.y * s);
-        }
-        ctx.restore();
-      });
-
-      const imgData = canvas.toDataURL('image/jpeg', 0.95);
-      doc.addImage(imgData, 'JPEG', 0, 0, originalViewport.width, originalViewport.height);
+  /** draw start / move / stop */
+  const onDrawStart = (e) => {
+    if (e.button !== 0) return
+    if (activeTool === 'hand') return
+    if (activeTool === 'select') {
+      const pt = toPdfCoords(e)
+      const idx = hitTest(pt)
+      if (idx >= 0) {
+        setSelected({ page: pageNum, index: idx })
+        draggingSel.current = true
+        dragStartPDF.current = pt
+      } else {
+        setSelected({ page: null, index: null })
+      }
+      return
     }
-    doc.save(`edited_${fileName}`);
-  };
+
+    // text tool: create overlay input
+    if (activeTool === 'text') {
+      const pt = toPdfCoords(e)
+      if (!textInput) setTextInput({ x: pt.x, y: pt.y, text: '' })
+      return
+    }
+
+    const pt = toPdfCoords(e)
+    setIsDrawing(true)
+    setStartPoint(pt)
+    if (activeTool === 'pen' || activeTool === 'eraser') setCurrentPath([pt])
+  }
+  const onDrawMove = (e) => {
+    if (activeTool === 'hand') return
+    const pt = toPdfCoords(e)
+
+    // moving a selected object
+    if (activeTool === 'select' && draggingSel.current && selected.page === pageNum && selected.index != null) {
+      const delta = { x: pt.x - dragStartPDF.current.x, y: pt.y - dragStartPDF.current.y }
+      dragStartPDF.current = pt
+      setAnnotations(prev => {
+        const arr = [...(prev[pageNum] || [])]
+        const ann = { ...arr[selected.index] }
+        if (ann.type === 'pen' || ann.type === 'eraser') {
+          ann.points = ann.points.map(p => ({ x: p.x + delta.x, y: p.y + delta.y }))
+        } else if (ann.type === 'line') {
+          ann.start = { x: ann.start.x + delta.x, y: ann.start.y + delta.y }
+          ann.end   = { x: ann.end.x + delta.x,   y: ann.end.y + delta.y }
+        } else if (ann.type === 'rect') {
+          ann.start = { x: ann.start.x + delta.x, y: ann.start.y + delta.y }
+          ann.end   = { x: ann.end.x + delta.x,   y: ann.end.y + delta.y }
+        } else if (ann.type === 'circle') {
+          ann.center = { x: ann.center.x + delta.x, y: ann.center.y + delta.y }
+        } else if (ann.type === 'text') {
+          ann.x += delta.x; ann.y += delta.y
+        }
+        arr[selected.index] = ann
+        return { ...prev, [pageNum]: arr }
+      })
+      return
+    }
+
+    if (!isDrawing) return
+    if (activeTool === 'pen' || activeTool === 'eraser') setCurrentPath(prev => [...prev, pt])
+    else if (['line', 'rect', 'circle'].includes(activeTool)) {
+      const can = drawCanvasRef.current
+      can.tempEnd = pt
+      drawAnnotations()
+    }
+  }
+  const onDrawEnd = () => {
+    if (activeTool === 'select') { draggingSel.current = false; return }
+    if (!isDrawing) return
+    const can = drawCanvasRef.current
+    const te = can?.tempEnd || null
+    const base = { color: activeTool === 'eraser' ? '#ffffff' : color, width: activeTool === 'eraser' ? 20 : lineWidth, filled: isFilled }
+    let newAnn = null
+
+    if (activeTool === 'pen' || activeTool === 'eraser') newAnn = { ...base, type: activeTool, points: currentPath }
+    else if (activeTool === 'line' && startPoint && te) newAnn = { ...base, type: 'line', start: startPoint, end: te }
+    else if (activeTool === 'rect' && startPoint && te) newAnn = { ...base, type: 'rect', start: startPoint, end: te }
+    else if (activeTool === 'circle' && startPoint && te) newAnn = { ...base, type: 'circle', center: startPoint, radius: dist(startPoint, te) }
+
+    if (newAnn) setAnnotations(p => ({ ...p, [pageNum]: [ ...(p[pageNum] || []), newAnn ] }))
+    setIsDrawing(false)
+    setCurrentPath([])
+    setStartPoint(null)
+    if (drawCanvasRef.current) drawCanvasRef.current.tempEnd = null
+  }
+
+  /** text finalize / keyboard */
+  const onTextKey = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      finalizeText()
+    }
+  }
+  const finalizeText = () => {
+    if (!textInput) return
+    const txt = textInput.text.trim()
+    if (!txt) { setTextInput(null); return }
+    const ann = { type: 'text', x: textInput.x, y: textInput.y, text: txt, color, size: 16 }
+    setAnnotations(p => ({ ...p, [pageNum]: [ ...(p[pageNum] || []), ann ] }))
+    setTextInput(null)
+  }
+
+  /** selection duplication */
+  const duplicateSelection = () => {
+    if (selected.page !== pageNum || selected.index == null) return
+    setAnnotations(prev => {
+      const arr = [...(prev[pageNum] || [])]
+      const src = arr[selected.index]
+      if (!src) return prev
+      const shift = 8 / scale
+      const copyAnn = JSON.parse(JSON.stringify(src))
+      const shiftPt = (p) => ({ x: p.x + shift, y: p.y + shift })
+      if (copyAnn.type === 'pen' || copyAnn.type === 'eraser') copyAnn.points = copyAnn.points.map(shiftPt)
+      else if (copyAnn.type === 'line') { copyAnn.start = shiftPt(copyAnn.start); copyAnn.end = shiftPt(copyAnn.end) }
+      else if (copyAnn.type === 'rect') { copyAnn.start = shiftPt(copyAnn.start); copyAnn.end = shiftPt(copyAnn.end) }
+      else if (copyAnn.type === 'circle') copyAnn.center = shiftPt(copyAnn.center)
+      else if (copyAnn.type === 'text') { copyAnn.x += shift; copyAnn.y += shift }
+      arr.push(copyAnn)
+      return { ...prev, [pageNum]: arr }
+    })
+  }
+
+  /** pan with middle/right mouse */
+  const onPanDown = (e) => {
+    if (activeTool !== 'hand' && e.button !== 1 && e.button !== 2) return
+    e.preventDefault()
+    isPanning.current = true
+    panPt.current = { x: e.clientX, y: e.clientY }
+  }
+  const onPanMove = (e) => {
+    if (!isPanning.current) return
+    e.preventDefault()
+    const dx = e.clientX - panPt.current.x
+    const dy = e.clientY - panPt.current.y
+    scrollRef.current.scrollLeft -= dx
+    scrollRef.current.scrollTop  -= dy
+    panPt.current = { x: e.clientX, y: e.clientY }
+  }
+  const onPanUp = () => { isPanning.current = false }
+  const onContextMenu = (e) => e.preventDefault()
+
+  /** export */
+  const exportPDF = async () => {
+    if (!pdfDoc || !jspdfLib) return
+    const { jsPDF } = jspdfLib
+    const doc = new jsPDF({ unit: 'pt', format: 'a4', putOnlyUsedFonts: true })
+    doc.deletePage(1)
+    const total = pdfDoc.numPages
+    const S = 2
+
+    for (let i = 1; i <= total; i++) {
+      const page = await pdfDoc.getPage(i)
+      const base = page.getViewport({ scale: 1 })
+      doc.addPage([base.width, base.height], base.width > base.height ? 'l' : 'p')
+      const vp = page.getViewport({ scale: S })
+      const c = document.createElement('canvas')
+      c.width = vp.width; c.height = vp.height
+      const ctx = c.getContext('2d')
+      await page.render({ canvasContext: ctx, viewport: vp }).promise
+
+      const anns = annotations[i] || []
+      anns.forEach(a => {
+        ctx.save()
+        ctx.globalCompositeOperation = a.type === 'eraser' ? 'destination-out' : 'source-over'
+        ctx.strokeStyle = a.color; ctx.fillStyle = a.color; ctx.lineCap = 'round'; ctx.lineJoin = 'round'
+        ctx.lineWidth = (a.width || 2) * S
+        if (a.type === 'pen' || a.type === 'eraser') {
+          ctx.beginPath()
+          if (a.points.length) {
+            ctx.moveTo(a.points[0].x * S, a.points[0].y * S)
+            a.points.forEach(p => ctx.lineTo(p.x * S, p.y * S))
+          }
+          ctx.stroke()
+        } else if (a.type === 'line') {
+          ctx.beginPath(); ctx.moveTo(a.start.x * S, a.start.y * S); ctx.lineTo(a.end.x * S, a.end.y * S); ctx.stroke()
+        } else if (a.type === 'rect') {
+          const x = a.start.x * S, y = a.start.y * S, w = (a.end.x - a.start.x) * S, h = (a.end.y - a.start.y) * S
+          ctx.beginPath(); ctx.rect(x, y, w, h); if (a.filled) ctx.fill(); ctx.stroke()
+        } else if (a.type === 'circle') {
+          ctx.beginPath(); ctx.arc(a.center.x * S, a.center.y * S, a.radius * S, 0, Math.PI * 2); if (a.filled) ctx.fill(); ctx.stroke()
+        } else if (a.type === 'text') {
+          ctx.font = `${(a.size || 16) * S}px sans-serif`; ctx.textBaseline = 'top'; ctx.fillText(a.text, a.x * S, a.y * S)
+        }
+        ctx.restore()
+      })
+
+      const img = c.toDataURL('image/jpeg', 0.95)
+      doc.addImage(img, 'JPEG', 0, 0, base.width, base.height)
+    }
+    doc.save(`edited_${fileName}`)
+  }
+
+  /** UI */
 
   return (
-    <div className="flex flex-col h-screen bg-gray-100 text-gray-800">
-      {/* Header / Toolbar */}
-      <div className="toolbar flex flex-wrap items-center justify-between gap-4">
+    <div className="flex flex-col h-screen bg-gray-100">
+      {/* Toolbar */}
+      <div className="toolbar flex items-center justify-between gap-4">
         <div className="flex items-center gap-4">
-
-          {/* Upload */}
+          {/* upload */}
           <div className="flex items-center gap-2 bg-gray-50 p-1 rounded-lg border">
-            <button onClick={() => fileInputRef.current.click()} className="icon-btn w-auto px-2 rounded-md">
-              <div className="flex items-center gap-2 text-gray-700">
-                <Upload size={18} /><span className="hidden sm:inline text-sm font-medium">Upload</span>
-              </div>
+            <button className="icon-btn" onClick={() => fileInputRef.current.click()}>
+              <Upload size={18} /><span className="text-sm">&nbsp;Upload</span>
             </button>
             <input ref={fileInputRef} type="file" accept=".pdf" className="hidden" onChange={handleFileUpload} />
           </div>
 
-          <div className="h-6 w-px bg-gray-300 mx-2" />
-
-          {/* Tools */}
-          <div className="flex items-center gap-1 bg-gray-50 p-1 rounded-lg border overflow-x-auto max-w-[50vw] sm:max-w-none no-scrollbar">
-            <ToolButton active={activeTool === 'cursor'} onClick={() => setActiveTool('cursor')} icon={<MousePointer size={18} />} label="Select / Move" />
-            <ToolButton active={activeTool === 'hand'} onClick={() => setActiveTool('hand')} icon={<Hand size={18} />} label="Pan (Hand)" />
-            <ToolButton active={activeTool === 'pen'} onClick={() => setActiveTool('pen')} icon={<Pen size={18} />} label="Pen" />
-            <ToolButton active={activeTool === 'eraser'} onClick={() => setActiveTool('eraser')} icon={<Eraser size={18} />} label="Eraser" />
-            <div className="w-px h-6 bg-gray-200 mx-1" />
-            <ToolButton active={activeTool === 'line'} onClick={() => setActiveTool('line')} icon={<Minus size={18} />} label="Line" />
-            <ToolButton active={activeTool === 'rect'} onClick={() => setActiveTool('rect')} icon={<Square size={18} />} label="Rectangle" />
-            <ToolButton active={activeTool === 'circle'} onClick={() => setActiveTool('circle')} icon={<Circle size={18} />} label="Circle" />
-            <ToolButton active={activeTool === 'text'} onClick={() => setActiveTool('text')} icon={<Type size={18} />} label="Text" />
+          {/* tools */}
+          <div className="flex items-center gap-1 bg-gray-50 p-1 rounded-lg border">
+            <Tool active={activeTool==='select'} onClick={()=>setActiveTool('select')} icon={<MousePointer size={18} />} label="Select/Move" />
+            <Tool active={activeTool==='hand'} onClick={()=>setActiveTool('hand')} icon={<span style={{fontSize:12}}>👋</span>} label="Pan (hand / mid/right mouse)" />
+            <div className="icon-btn" style={{cursor:'default', opacity:.35}}>|</div>
+            <Tool active={activeTool==='pen'} onClick={()=>setActiveTool('pen')} icon={<Pen size={18} />} label="Pen" />
+            <Tool active={activeTool==='eraser'} onClick={()=>setActiveTool('eraser')} icon={<Eraser size={18} />} label="Eraser" />
+            <div className="icon-btn" style={{cursor:'default', opacity:.35}}>|</div>
+            <Tool active={activeTool==='line'} onClick={()=>setActiveTool('line')} icon={<Minus size={18} />} label="Line" />
+            <Tool active={activeTool==='rect'} onClick={()=>setActiveTool('rect')} icon={<Square size={18} />} label="Rectangle" />
+            <Tool active={activeTool==='circle'} onClick={()=>setActiveTool('circle')} icon={<Circle size={18} />} label="Circle" />
+            <Tool active={activeTool==='text'} onClick={()=>setActiveTool('text')} icon={<Type size={18} />} label="Text" />
           </div>
 
-          <div className="h-6 w-px bg-gray-300 mx-2" />
-
-          {/* Style Controls */}
-          {activeTool !== 'eraser' && (
-            <div className="flex items-center gap-3">
-              <input type="color" value={color} onChange={(e) => setColor(e.target.value)} className="w-8 h-8 rounded cursor-pointer border-0 p-0 shadow-sm" title="Color" />
-
-              {/* Fill Toggle */}
-              <button
-                onClick={toggleFill}
-                className={`icon-btn ${isFilled ? 'icon-btn-active' : ''}`}
-                title="Fill Shapes (Paint Bucket)"
-              >
-                <PaintBucket size={18} />
-              </button>
-
-              {/* Thickness */}
-              <div className="flex flex-col w-28">
-                <input
-                  type="range"
-                  min="1"
-                  max="10"
-                  value={lineWidth}
-                  onChange={(e) => setLineWidth(parseInt(e.target.value))}
-                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                />
-                <span className="text-[10px] text-gray-500 text-center">{lineWidth}px</span>
-              </div>
+          {/* style */}
+          <div className="flex items-center gap-3">
+            <input type="color" value={color} onChange={(e)=>setColor(e.target.value)} className="icon-btn" title="Color" />
+            <button className={`icon-btn ${isFilled?'icon-btn-active':''}`} onClick={()=>setIsFilled(v=>!v)} title="Fill (for rect/circle)">
+              <PaintBucket size={18} />
+            </button>
+            <div className="flex items-center gap-2">
+              <input
+                type="range" min="1" max="10" value={lineWidth}
+                onChange={e=>setLineWidth(parseInt(e.target.value))}
+              />
+              <span className="text-xs">{lineWidth}px</span>
             </div>
-          )}
+          </div>
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Duplicate */}
-          <button onClick={duplicateSelected} className="icon-btn" title="Duplicate (Ctrl/Cmd + D)">
-            <Copy size={18} />
-          </button>
-
-          <button onClick={undoLast} className="icon-btn" title="Undo last action"><RotateCcw size={18} /></button>
-          <button onClick={() => { setAnnotations({ ...annotations, [pageNum]: [] }); setSelected({ page: null, index: -1 }); }} className="icon-btn text-red-500 hover:bg-red-50" title="Clear Page"><Trash2 size={18} /></button>
-          <div className="h-6 w-px bg-gray-300 mx-2" />
-          <button onClick={exportPDF} disabled={!pdfDoc} className="btn-primary disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed">
-            <span className="inline-flex items-center gap-2"><Save size={18} /><span className="hidden sm:inline">Save PDF</span></span>
-          </button>
+          <button className="icon-btn" onClick={duplicateSelection} title="Duplicate selected"><Copy size={18} /></button>
+          <button className="icon-btn" onClick={()=>{
+            const arr = [...(annotations[pageNum] || [])]; if (!arr.length) return
+            setAnnotations(p=>({ ...p, [pageNum]: arr.slice(0,-1) }))
+          }} title="Undo last"><RotateCcw size={18} /></button>
+          <button className="icon-btn" onClick={()=>setAnnotations(p=>({ ...p, [pageNum]: [] }))} title="Clear page"><Trash2 size={18} /></button>
+          <button className="btn-primary" disabled={!pdfDoc} onClick={exportPDF}><Save size={18} />&nbsp;Save PDF</button>
         </div>
       </div>
 
-      {/* Main Workspace */}
+      {/* Workspace */}
       <div
-        ref={scrollContainerRef}
-        className="flex-1 overflow-auto bg-gray-200/60 relative p-8 flex justify-center no-scrollbar"
-        onMouseDown={handleContainerMouseDown}
-        onMouseMove={handleContainerMouseMove}
-        onMouseUp={handleContainerMouseUp}
-        onMouseLeave={handleContainerMouseUp}
-        onContextMenu={handleContextMenu}
+        ref={scrollRef}
+        className="flex-1 overflow-auto bg-gray-200/60 relative py-8 flex justify-center no-scrollbar"
+        onMouseDown={(e)=>{ onPanDown(e); }}
+        onMouseMove={onPanMove}
+        onMouseUp={onPanUp}
+        onMouseLeave={onPanUp}
+        onContextMenu={onContextMenu}
       >
-        {!pdfDoc ? (
-          <div className="flex flex-col items-center justify-center text-gray-400 h-full">
-            <div className="bg-white p-8 rounded-2xl shadow-sm text-center max-w-md">
-              <Upload size={48} className="mx-auto mb-4 text-blue-500 opacity-50" />
-              <h3 className="text-xl font-semibold text-gray-700 mb-2">Upload a Document</h3>
-              <p className="mb-6">Select a PDF file to start annotating.</p>
-              <button onClick={() => fileInputRef.current.click()} className="btn-primary">Choose PDF</button>
+        {/* IMPORTANT: put horizontal gutter INSIDE the scroll content (so pan reaches the edges) */}
+        <div className="mx-8">
+          {!pdfDoc ? (
+            <div className="bg-white p-8 rounded-lg shadow-sm" style={{marginTop:80}}>
+              <Upload size={48} className="text-gray-400" />
+              <h3 className="text-gray-700">Upload a PDF to start</h3>
+              <div className="p-2" />
+              <button className="btn-primary" onClick={()=>fileInputRef.current.click()}>Choose PDF</button>
             </div>
-          </div>
-        ) : (
-          <div
-            className="relative shadow-xl origin-top-left"
-            style={{
-              width: 'fit-content',
-              height: 'fit-content',
-              cursor:
-                isPanning.current
-                  ? 'grabbing'
-                  : (activeTool === 'hand' || spacePanning)
-                  ? 'grab'
-                  : activeTool === 'cursor'
-                  ? (dragging ? 'grabbing' : 'default')
-                  : 'crosshair'
-            }}
-          >
-            <canvas ref={pdfCanvasRef} className="bg-white block" />
-            <canvas
-              ref={canvasRef}
-              className="absolute top-0 left-0"
-              onMouseDown={startDrawing}
-              onMouseMove={draw}
-              onMouseUp={stopDrawing}
-              onMouseLeave={stopDrawing}
-            />
-            {textInput && (
-              <div className="absolute z-50" style={{ left: textInput.x * scale, top: (textInput.y * scale) - 4 }}>
-                <input
-                  autoFocus
-                  value={textInput.text}
-                  onChange={(e) => setTextInput({ ...textInput, text: e.target.value })}
-                  onBlur={finalizeText}
-                  onKeyDown={handleTextSubmit}
-                  className="bg-transparent border border-blue-500 rounded px-1 py-0 outline-none text-blue-900 placeholder-blue-300 shadow-sm bg-white/50"
-                  style={{ font: `${16 * scale}px sans-serif`, color, minWidth: '100px', lineHeight: 1 }}
-                  placeholder="Type..."
-                  onMouseDown={(e) => e.stopPropagation()}
-                />
-              </div>
-            )}
-          </div>
-        )}
+          ) : (
+            <div
+              className="relative shadow-xl origin-top-left"
+              style={{ width: 'fit-content', height: 'fit-content', cursor: isPanning.current ? 'grabbing' : (activeTool==='select' ? 'default' : 'crosshair') }}
+            >
+              <canvas ref={pdfCanvasRef} className="bg-white block" />
+              <canvas
+                ref={drawCanvasRef}
+                className="absolute top-0 left-0"
+                onMouseDown={onDrawStart}
+                onMouseMove={onDrawMove}
+                onMouseUp={onDrawEnd}
+                onMouseLeave={onDrawEnd}
+              />
+              {textInput && (
+                <div className="absolute" style={{ left: textInput.x * scale, top: (textInput.y * scale) - 4, zIndex: 50 }}>
+                  <input
+                    autoFocus
+                    value={textInput.text}
+                    onChange={(e)=>setTextInput({ ...textInput, text: e.target.value })}
+                    onKeyDown={onTextKey}
+                    onBlur={finalizeText}
+                    className="bg-white border rounded-lg p-1"
+                    style={{ font: `${16 * scale}px sans-serif`, minWidth: 120 }}
+                    placeholder="Type…"
+                    onMouseDown={(e)=>e.stopPropagation()}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Footer / Pagination */}
       {pdfDoc && (
-        <div className="bg-white border-t p-2 flex justify-between items-center px-6 z-10">
+        <div className="bg-white border-t p-2 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <button onClick={() => setScale(s => Math.max(0.25, s - 0.25))} className="icon-btn"><ZoomOut size={16} /></button>
-            <span className="text-xs font-mono w-12 text-center">{Math.round(scale * 100)}%</span>
-            <button onClick={() => setScale(s => Math.min(4, s + 0.25))} className="icon-btn"><ZoomIn size={16} /></button>
+            <button className="icon-btn" onClick={()=>setScale(s=>Math.max(0.25, s-0.25))}><ZoomOut size={16} /></button>
+            <span className="text-xs font-mono w-12" style={{textAlign:'center'}}>{Math.round(scale*100)}%</span>
+            <button className="icon-btn" onClick={()=>setScale(s=>Math.min(4, s+0.25))}><ZoomIn size={16} /></button>
           </div>
-
-          <div className="flex items-center gap-4">
-            <button onClick={() => setPageNum(p => Math.max(1, p - 1))} disabled={pageNum <= 1} className="icon-btn disabled:opacity-30"><ChevronLeft size={20} /></button>
-            <span className="font-medium text-sm">Page {pageNum} of {pdfDoc.numPages}</span>
-            <button onClick={() => setPageNum(p => Math.min(pdfDoc.numPages, p + 1))} disabled={pageNum >= pdfDoc.numPages} className="icon-btn disabled:opacity-30"><ChevronRight size={20} /></button>
+          <div className="flex items-center gap-3">
+            <button className="icon-btn" onClick={()=>setPageNum(p=>Math.max(1, p-1))} disabled={pageNum<=1}><ChevronLeft size={20} /></button>
+            <span className="text-sm">Page {pageNum} of {pdfDoc.numPages}</span>
+            <button className="icon-btn" onClick={()=>setPageNum(p=>Math.min(pdfDoc.numPages, p+1))} disabled={pageNum>=pdfDoc.numPages}><ChevronRight size={20} /></button>
           </div>
-
-          <div className="text-xs text-gray-400 max-w-[200px] truncate">{fileName}</div>
+          <div className="text-xs text-gray-400" style={{maxWidth:240, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{fileName}</div>
         </div>
       )}
     </div>
-  );
-};
+  )
+}
 
-// Helper Component for Tools
-const ToolButton = ({ active, onClick, icon, label }) => (
-  <button onClick={onClick} className={`icon-btn ${active ? 'icon-btn-active' : ''}`} title={label}>
-    {icon}
-  </button>
-);
-
-export default App;
+function Tool({ active, onClick, icon, label }) {
+  return (
+    <button className={`icon-btn ${active ? 'icon-btn-active' : ''}`} onClick={onClick} title={label}>
+      {icon}
+    </button>
+  )
+}
