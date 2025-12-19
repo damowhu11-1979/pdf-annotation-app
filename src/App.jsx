@@ -18,9 +18,7 @@ import {
   Eraser,
   PaintBucket,
   Sparkles,
-  Loader2,
-  Bot,
-  X
+  Loader2
 } from 'lucide-react';
 
 // External libraries
@@ -74,6 +72,7 @@ const App = () => {
   const [activeTool, setActiveTool] = useState('cursor');
   const [color, setColor] = useState('#EF4444');
   const [lineWidth, setLineWidth] = useState(3);
+  const [fontSize, setFontSize] = useState(16); // New Font Size State
   const [isFilled, setIsFilled] = useState(false);
 
   // Annotations store: { pageNum: [ ... ] }
@@ -87,12 +86,8 @@ const App = () => {
   // Text input overlay state
   const [textInput, setTextInput] = useState(null); // { x, y, text } in PDF coords
   const textInputRef = useRef(null);
-  const ignoreBlurRef = useRef(false);
 
   // AI State
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analysisResult, setAnalysisResult] = useState(null);
-  const [showAnalysisModal, setShowAnalysisModal] = useState(false);
   const [isPolishing, setIsPolishing] = useState(false);
 
   const canvasRef = useRef(null);
@@ -263,7 +258,7 @@ const App = () => {
   // Redraw annotations
   useEffect(() => {
     drawAnnotations();
-  }, [annotations, pageNum, scale, currentPath, startPoint, isFilled, isDrawing, selectedIndex]);
+  }, [annotations, pageNum, scale, currentPath, startPoint, isFilled, isDrawing, selectedIndex, fontSize]);
 
   // Force focus on text input when it opens
   useEffect(() => {
@@ -418,34 +413,6 @@ const App = () => {
     return { x: canvasX / scale, y: canvasY / scale };
   };
 
-  // --- AI Features ---
-  const handleAnalyzePage = async () => {
-    if (!pdfDoc) return;
-    setIsAnalyzing(true);
-    setShowAnalysisModal(true);
-    setAnalysisResult(""); 
-    
-    try {
-      const page = await pdfDoc.getPage(pageNum);
-      const textContent = await page.getTextContent();
-      const text = textContent.items.map(item => item.str).join(' ');
-      
-      if (!text.trim()) {
-        setAnalysisResult("No text found on this page to analyze. It might be an image-only PDF.");
-        setIsAnalyzing(false);
-        return;
-      }
-
-      const prompt = `Here is the text from page ${pageNum} of a PDF document: "${text}". \n\nPlease provide a concise summary of this page and list the top 3 key takeaways. Format the output with bold headings.`;
-      const result = await callGemini(prompt, "You are a helpful PDF assistant.");
-      setAnalysisResult(result);
-    } catch (error) {
-      setAnalysisResult("Failed to analyze page. Please try again.");
-    } finally {
-      setIsAnalyzing(false);
-    }
-  };
-
   const handlePolishText = async () => {
     if (!textInput || !textInput.text.trim()) return;
     setIsPolishing(true);
@@ -462,41 +429,40 @@ const App = () => {
   };
 
   // --- Text finalize ---
-  const finalizeText = () => {
+  const finalizeText = (shouldClose = true) => {
     if (!textInput) return;
 
     const t = (textInput.text || '').trim();
-    if (!t) {
-      setTextInput(null);
-      return;
+    if (t) {
+      const newAnn = {
+        type: 'text',
+        x: textInput.x,
+        y: textInput.y,
+        text: textInput.text,
+        color,
+        size: fontSize // Use current font size
+      };
+
+      setAnnotations(prev => ({
+        ...prev,
+        [pageNum]: [...(prev[pageNum] || []), newAnn]
+      }));
     }
-
-    const newAnn = {
-      type: 'text',
-      x: textInput.x,
-      y: textInput.y,
-      text: textInput.text,
-      color,
-      size: 16
-    };
-
-    setAnnotations(prev => ({
-      ...prev,
-      [pageNum]: [...(prev[pageNum] || []), newAnn]
-    }));
-    setTextInput(null);
+    
+    if (shouldClose) {
+      setTextInput(null);
+    }
   };
 
   // Separate handler for blur that checks the ignore flag
   const handleInputBlur = () => {
-    if (ignoreBlurRef.current) return;
-    finalizeText();
+    finalizeText(true);
   };
 
   const handleTextSubmit = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      finalizeText();
+      finalizeText(true);
     }
   };
 
@@ -562,15 +528,15 @@ const App = () => {
     const coords = getPdfCoordinates(e);
 
     if (activeTool === 'text') {
-      // If we are already typing, save the current text manually before moving
+      // Prevent browser default (blur) to keep control manually
+      e.preventDefault();
+      
+      // If we are already typing, save current text but DON'T close the state
+      // This effectively "moves" the active box to the new location
       if (textInput) {
-        // Prevent the onBlur from double-saving or clearing the wrong state
-        ignoreBlurRef.current = true;
-        finalizeText();
-        // Reset the flag after a short delay to allow the blur event to fire and be ignored
-        setTimeout(() => { ignoreBlurRef.current = false; }, 50);
+        finalizeText(false); // false = don't set to null
       }
-      // Start the new text input
+      // Move to new location and clear text
       setTextInput({ x: coords.x, y: coords.y, text: '' });
       return;
     }
@@ -1009,34 +975,42 @@ const App = () => {
               </button>
 
               <div className="flex flex-col w-24">
-                <input
-                  type="range"
-                  min="1"
-                  max="10"
-                  value={lineWidth}
-                  onChange={(e) => setLineWidth(parseInt(e.target.value))}
-                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                  title="Thickness"
-                />
-                <span className="text-[10px] text-gray-500 text-center">{lineWidth}px</span>
+                {activeTool === 'text' ? (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] text-gray-500">Size</span>
+                      <span className="text-[10px] text-gray-500">{fontSize}px</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="8"
+                      max="72"
+                      value={fontSize}
+                      onChange={(e) => setFontSize(parseInt(e.target.value))}
+                      className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                      title="Font Size"
+                    />
+                  </>
+                ) : (
+                  <>
+                    <input
+                      type="range"
+                      min="1"
+                      max="10"
+                      value={lineWidth}
+                      onChange={(e) => setLineWidth(parseInt(e.target.value))}
+                      className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                      title="Thickness"
+                    />
+                    <span className="text-[10px] text-gray-500 text-center">{lineWidth}px</span>
+                  </>
+                )}
               </div>
             </div>
           )}
         </div>
 
         <div className="flex items-center gap-2">
-            {/* AI Assistant Button */}
-            <button 
-              onClick={handleAnalyzePage}
-              disabled={!pdfDoc}
-              className={`p-2 rounded text-indigo-600 hover:bg-indigo-50 flex items-center gap-2 transition-all ${!pdfDoc ? 'opacity-50 cursor-not-allowed' : ''}`}
-              title="Analyze Page with AI"
-            >
-              <Sparkles size={18} />
-              <span className="hidden sm:inline font-medium">Analyze Page</span>
-            </button>
-            <div className="h-6 w-px bg-gray-300 mx-2"></div>
-
           <button
             onClick={undoLast}
             className="p-2 hover:bg-gray-100 rounded text-gray-600"
@@ -1136,7 +1110,8 @@ const App = () => {
                     onKeyDown={handleTextSubmit}
                     className="bg-white border border-blue-500 rounded px-2 py-1 outline-none text-blue-900 placeholder-blue-300 shadow-lg min-w-[200px]"
                     style={{
-                      font: `${16 * scale}px sans-serif`,
+                      fontSize: `${fontSize * scale}px`,
+                      fontFamily: 'sans-serif',
                       color: color,
                       lineHeight: 1.2
                     }}
@@ -1163,48 +1138,6 @@ const App = () => {
           </div>
         )}
       </div>
-
-       {/* Analysis Modal */}
-      {showAnalysisModal && (
-        <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col">
-            <div className="p-4 border-b flex justify-between items-center bg-indigo-50 rounded-t-xl">
-              <div className="flex items-center gap-2 text-indigo-900 font-semibold">
-                <Bot size={20} />
-                <span>Page {pageNum} Analysis</span>
-              </div>
-              <button 
-                onClick={() => setShowAnalysisModal(false)}
-                className="p-1 hover:bg-indigo-100 rounded-full text-indigo-700"
-              >
-                <X size={20} />
-              </button>
-            </div>
-            
-            <div className="p-6 overflow-y-auto">
-              {isAnalyzing ? (
-                <div className="flex flex-col items-center justify-center py-8 text-gray-500 gap-3">
-                  <Loader2 size={32} className="animate-spin text-indigo-500" />
-                  <p>Analyzing text content...</p>
-                </div>
-              ) : (
-                <div className="prose prose-sm max-w-none text-gray-700 whitespace-pre-wrap">
-                  {analysisResult}
-                </div>
-              )}
-            </div>
-            
-            <div className="p-4 border-t bg-gray-50 rounded-b-xl flex justify-end">
-              <button
-                onClick={() => setShowAnalysisModal(false)}
-                className="px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700 font-medium"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
