@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Upload, Download, Pen, Minus, Type, ChevronLeft, ChevronRight,
   RotateCcw, Trash2, Save, MousePointer, ZoomIn, ZoomOut,
-  Square, Circle, Eraser, PaintBucket
+  Square, Circle, Eraser, PaintBucket, Copy, Hand
 } from 'lucide-react';
 
 // External libraries
@@ -18,7 +18,7 @@ const App = () => {
   const [scale, setScale] = useState(1.5);
   const [fileName, setFileName] = useState("document.pdf");
 
-  // Tools: 'cursor', 'pen', 'line', 'rect', 'circle', 'text', 'eraser'
+  // Tools: 'cursor', 'hand', 'pen', 'line', 'rect', 'circle', 'text', 'eraser'
   const [activeTool, setActiveTool] = useState('cursor');
   const [color, setColor] = useState('#EF4444');
   const [lineWidth, setLineWidth] = useState(3);
@@ -37,6 +37,8 @@ const App = () => {
   const [selected, setSelected] = useState({ page: null, index: -1 });
   const [dragging, setDragging] = useState(false);
   const dragStartRef = useRef(null);
+
+  const [spacePanning, setSpacePanning] = useState(false);
 
   const canvasRef = useRef(null);
   const pdfCanvasRef = useRef(null);
@@ -110,25 +112,42 @@ const App = () => {
   useEffect(() => { if (pdfDoc) renderPage(pageNum); }, [pdfDoc, pageNum, scale, pdfLib]);
   useEffect(() => { drawAnnotations(); }, [annotations, pageNum, scale, currentPath, startPoint, isFilled, selected, dragging]);
 
-  // Custom wheel zoom
+  // Keyboard: space for panning, Ctrl/Cmd + D for duplicate
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (e.code === 'Space') {
+        e.preventDefault();
+        setSpacePanning(true);
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') {
+        e.preventDefault();
+        duplicateSelected();
+      }
+    };
+    const onKeyUp = (e) => {
+      if (e.code === 'Space') setSpacePanning(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    };
+  }, [selected, annotations, pageNum]);
+
+  // Wheel: zoom only when Ctrl is held; otherwise allow natural scroll for panning
   useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
 
     const handleWheel = (e) => {
-      e.preventDefault();
-
       if (e.ctrlKey) {
+        e.preventDefault();
         const delta = -e.deltaY;
-        setScale((s) => Math.min(5, Math.max(0.5, s + delta * 0.002)));
-      } else {
-        const delta = -e.deltaY;
-        const zoomStep = 0.1;
-        setScale((prev) => {
-          const next = delta > 0 ? prev + zoomStep : prev - zoomStep;
-          return Math.min(4, Math.max(0.25, next));
-        });
+        const step = delta * 0.002;
+        setScale((s) => Math.min(5, Math.max(0.5, s + step)));
       }
+      // If not ctrlKey, do NOT preventDefault -> native scroll pans to the extremes
     };
 
     container.addEventListener('wheel', handleWheel, { passive: false });
@@ -182,8 +201,7 @@ const App = () => {
     let t = lenSq ? dot / lenSq : -1;
     t = Math.max(0, Math.min(1, t));
     const nx = x1 + t * C, ny = y1 + t * D;
-    const dx = px - nx, dy = py - ny;
-    return Math.hypot(dx, dy);
+    return Math.hypot(px - nx, py - ny);
   };
   const insideRect = (x, y, r) => {
     const minX = Math.min(r.start.x, r.end.x);
@@ -198,13 +216,20 @@ const App = () => {
     return { minX, minY, maxX, maxY };
   };
 
-  // --- Pan Logic ---
-  const handleContainerMouseDown = (e) => {
-    if (e.button === 2 || e.button === 1) {
+  // --- Pan Logic (middle/right, Hand tool, or Space+left) ---
+  const beginPanIfNeeded = (e) => {
+    const wantPan = (activeTool === 'hand') || spacePanning || e.button === 1 || e.button === 2;
+    if (wantPan) {
       e.preventDefault();
       isPanning.current = true;
       startPan.current = { x: e.clientX, y: e.clientY };
+      return true;
     }
+    return false;
+  };
+
+  const handleContainerMouseDown = (e) => {
+    if (beginPanIfNeeded(e)) return;
   };
   const handleContainerMouseMove = (e) => {
     if (isPanning.current && scrollContainerRef.current) {
@@ -232,47 +257,30 @@ const App = () => {
 
   const hitTestAt = (p) => {
     const pageAnns = annotations[pageNum] || [];
-    const padding = 6 / scale; // pixels -> pdf pts
+    const padding = 6 / scale;
     for (let i = pageAnns.length - 1; i >= 0; i--) {
       const ann = pageAnns[i];
       if (ann.type === 'rect') {
-        if (ann.filled) {
-          if (insideRect(p.x, p.y, ann)) return i;
-        } else {
-          // treat border as wide band
-          const nearEdge =
-            Math.abs(p.x - ann.start.x) <= padding || Math.abs(p.x - ann.end.x) <= padding ||
-            Math.abs(p.y - ann.start.y) <= padding || Math.abs(p.y - ann.end.y) <= padding;
-          if (insideRect(p.x, p.y, ann) && nearEdge) return i;
-        }
+        if (ann.filled ? insideRect(p.x, p.y, ann)
+          : insideRect(p.x, p.y, ann) &&
+            (Math.abs(p.x - ann.start.x) <= padding || Math.abs(p.x - ann.end.x) <= padding ||
+             Math.abs(p.y - ann.start.y) <= padding || Math.abs(p.y - ann.end.y) <= padding)) return i;
       } else if (ann.type === 'circle') {
         const d = Math.hypot(p.x - ann.center.x, p.y - ann.center.y);
-        if (ann.filled) {
-          if (d <= ann.radius + padding) return i;
-        } else {
-          if (Math.abs(d - ann.radius) <= padding) return i;
-        }
+        if (ann.filled ? d <= ann.radius + padding : Math.abs(d - ann.radius) <= padding) return i;
       } else if (ann.type === 'line') {
-        const d = pointDistanceToSegment(p.x, p.y, ann.start.x, ann.start.y, ann.end.x, ann.end.y);
-        if (d <= padding) return i;
+        if (pointDistanceToSegment(p.x, p.y, ann.start.x, ann.start.y, ann.end.x, ann.end.y) <= padding) return i;
       } else if (ann.type === 'pen' || ann.type === 'eraser') {
-        if (ann.points.length > 1) {
-          for (let k = 0; k < ann.points.length - 1; k++) {
-            const a = ann.points[k], b = ann.points[k + 1];
-            const d = pointDistanceToSegment(p.x, p.y, a.x, a.y, b.x, b.y);
-            if (d <= padding) return i;
-          }
-          const bb = bboxOfPen(ann.points);
-          if (p.x >= bb.minX - padding && p.x <= bb.maxX + padding &&
-              p.y >= bb.minY - padding && p.y <= bb.maxY + padding) {
-            return i;
-          }
+        for (let k = 0; k < ann.points.length - 1; k++) {
+          const a = ann.points[k], b = ann.points[k + 1];
+          if (pointDistanceToSegment(p.x, p.y, a.x, a.y, b.x, b.y) <= padding) return i;
         }
+        const bb = bboxOfPen(ann.points);
+        if (p.x >= bb.minX - padding && p.x <= bb.maxX + padding && p.y >= bb.minY - padding && p.y <= bb.maxY + padding) return i;
       } else if (ann.type === 'text') {
-        const approxW = (ann.size * 0.6) * (ann.text?.length || 1) / scale;
-        const approxH = (ann.size) / scale;
-        const inBox = p.x >= ann.x && p.x <= ann.x + approxW && p.y >= ann.y && p.y <= ann.y + approxH;
-        if (inBox) return i;
+        const approxW = (ann.size * 0.6) * (ann.text?.length || 1) / 1; // already in pdf units
+        const approxH = ann.size;
+        if (p.x >= ann.x && p.x <= ann.x + approxW && p.y >= ann.y && p.y <= ann.y + approxH) return i;
       }
     }
     return -1;
@@ -280,6 +288,12 @@ const App = () => {
 
   const startDrawing = (e) => {
     if (e.button !== 0) return;
+
+    // Pan with left mouse if Hand tool or Space pressed
+    if (activeTool === 'hand' || spacePanning) {
+      beginPanIfNeeded({ ...e, button: 1 }); // treat as pan
+      return;
+    }
 
     // MOVE/SELECT mode with cursor
     if (activeTool === 'cursor') {
@@ -298,7 +312,8 @@ const App = () => {
 
     // Drawing modes
     if (activeTool === 'text') {
-      if (!textInput) setTextInput({ x: getPdfCoordinates(e).x, y: getPdfCoordinates(e).y, text: '' });
+      const coords = getPdfCoordinates(e);
+      if (!textInput) setTextInput({ x: coords.x, y: coords.y, text: '' });
       return;
     }
 
@@ -342,7 +357,7 @@ const App = () => {
         return copy;
       });
 
-      return; // don't draw new content while dragging
+      return;
     }
 
     // Draw new content
@@ -356,6 +371,12 @@ const App = () => {
   };
 
   const stopDrawing = () => {
+    // End pan
+    if (isPanning.current) {
+      isPanning.current = false;
+      return;
+    }
+
     // End move
     if (dragging) {
       setDragging(false);
@@ -404,6 +425,39 @@ const App = () => {
     const newAnn = { type: 'text', x: textInput.x, y: textInput.y, text: textInput.text, color, size: 16 };
     setAnnotations({ ...annotations, [pageNum]: [...pageAnns, newAnn] });
     setTextInput(null);
+  };
+
+  // Duplicate selected (or last) annotation
+  const duplicateSelected = () => {
+    const pageAnns = annotations[pageNum] || [];
+    if (pageAnns.length === 0) return;
+
+    let idx = selected.index;
+    if (idx < 0) idx = pageAnns.length - 1;
+
+    const src = pageAnns[idx];
+    if (!src) return;
+
+    const clone = JSON.parse(JSON.stringify(src));
+    const OFFSET = 10; // pts
+
+    if (clone.type === 'line') {
+      clone.start.x += OFFSET; clone.start.y += OFFSET;
+      clone.end.x   += OFFSET; clone.end.y   += OFFSET;
+    } else if (clone.type === 'rect') {
+      clone.start.x += OFFSET; clone.start.y += OFFSET;
+      clone.end.x   += OFFSET; clone.end.y   += OFFSET;
+    } else if (clone.type === 'circle') {
+      clone.center.x += OFFSET; clone.center.y += OFFSET;
+    } else if (clone.type === 'pen' || clone.type === 'eraser') {
+      clone.points = clone.points.map(p => ({ x: p.x + OFFSET, y: p.y + OFFSET }));
+    } else if (clone.type === 'text') {
+      clone.x += OFFSET; clone.y += OFFSET;
+    }
+
+    const newIndex = pageAnns.length;
+    setAnnotations({ ...annotations, [pageNum]: [...pageAnns, clone] });
+    setSelected({ page: pageNum, index: newIndex });
   };
 
   const drawAnnotations = () => {
@@ -627,6 +681,7 @@ const App = () => {
           {/* Tools */}
           <div className="flex items-center gap-1 bg-gray-50 p-1 rounded-lg border overflow-x-auto max-w-[50vw] sm:max-w-none no-scrollbar">
             <ToolButton active={activeTool === 'cursor'} onClick={() => setActiveTool('cursor')} icon={<MousePointer size={18} />} label="Select / Move" />
+            <ToolButton active={activeTool === 'hand'} onClick={() => setActiveTool('hand')} icon={<Hand size={18} />} label="Pan (Hand)" />
             <ToolButton active={activeTool === 'pen'} onClick={() => setActiveTool('pen')} icon={<Pen size={18} />} label="Pen" />
             <ToolButton active={activeTool === 'eraser'} onClick={() => setActiveTool('eraser')} icon={<Eraser size={18} />} label="Eraser" />
             <div className="w-px h-6 bg-gray-200 mx-1" />
@@ -643,7 +698,7 @@ const App = () => {
             <div className="flex items-center gap-3">
               <input type="color" value={color} onChange={(e) => setColor(e.target.value)} className="w-8 h-8 rounded cursor-pointer border-0 p-0 shadow-sm" title="Color" />
 
-              {/* Fill Toggle (smart) */}
+              {/* Fill Toggle */}
               <button
                 onClick={toggleFill}
                 className={`icon-btn ${isFilled ? 'icon-btn-active' : ''}`}
@@ -669,6 +724,11 @@ const App = () => {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Duplicate */}
+          <button onClick={duplicateSelected} className="icon-btn" title="Duplicate (Ctrl/Cmd + D)">
+            <Copy size={18} />
+          </button>
+
           <button onClick={undoLast} className="icon-btn" title="Undo last action"><RotateCcw size={18} /></button>
           <button onClick={() => { setAnnotations({ ...annotations, [pageNum]: [] }); setSelected({ page: null, index: -1 }); }} className="icon-btn text-red-500 hover:bg-red-50" title="Clear Page"><Trash2 size={18} /></button>
           <div className="h-6 w-px bg-gray-300 mx-2" />
@@ -700,7 +760,18 @@ const App = () => {
         ) : (
           <div
             className="relative shadow-xl origin-top-left"
-            style={{ width: 'fit-content', height: 'fit-content', cursor: isPanning.current ? 'grabbing' : activeTool === 'cursor' ? (dragging ? 'grabbing' : 'grab') : 'crosshair' }}
+            style={{
+              width: 'fit-content',
+              height: 'fit-content',
+              cursor:
+                isPanning.current
+                  ? 'grabbing'
+                  : (activeTool === 'hand' || spacePanning)
+                  ? 'grab'
+                  : activeTool === 'cursor'
+                  ? (dragging ? 'grabbing' : 'default')
+                  : 'crosshair'
+            }}
           >
             <canvas ref={pdfCanvasRef} className="bg-white block" />
             <canvas
