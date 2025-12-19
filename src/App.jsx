@@ -1,8 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import {
   Upload, Pen, Minus, Type, ChevronLeft, ChevronRight, RotateCcw, Trash2,
-  Save, MousePointer, ZoomIn, ZoomOut, Square, Circle, Eraser, PaintBucket,
-  Copy
+  Save, MousePointer, ZoomIn, ZoomOut, Square, Circle, Eraser, PaintBucket, Copy
 } from 'lucide-react'
 
 // External libs (CDN)
@@ -10,14 +9,13 @@ const PDFJS_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.mi
 const PDFJS_WORKER_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 const JSPDF_URL = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
 
-/** hit testing helpers */
-const near = (a, b, tol = 6) => Math.abs(a - b) <= tol
+// helpers
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y)
 const pointInRect = (p, a, b) => {
   const x1 = Math.min(a.x, b.x), x2 = Math.max(a.x, b.x)
   const y1 = Math.min(a.y, b.y), y2 = Math.max(a.y, b.y)
   return p.x >= x1 && p.x <= x2 && p.y >= y1 && p.y <= y2
 }
-const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y)
 
 export default function App() {
   const [pdfLib, setPdfLib] = useState(null)
@@ -27,15 +25,14 @@ export default function App() {
   const [scale, setScale] = useState(1.5)
   const [fileName, setFileName] = useState('document.pdf')
 
-  // Tools: select, pen, line, rect, circle, text, eraser, hand (pan)
+  // Tools: select, hand, pen, line, rect, circle, text, eraser
   const [activeTool, setActiveTool] = useState('select')
   const [color, setColor] = useState('#EF4444')
   const [lineWidth, setLineWidth] = useState(3)
   const [isFilled, setIsFilled] = useState(false)
 
-  // data
   const [annotations, setAnnotations] = useState({})
-  const [selected, setSelected] = useState({ page: null, index: null }) // selected ann
+  const [selected, setSelected] = useState({ page: null, index: null })
 
   // drawing state
   const [isDrawing, setIsDrawing] = useState(false)
@@ -43,7 +40,7 @@ export default function App() {
   const [startPoint, setStartPoint] = useState(null)
   const [textInput, setTextInput] = useState(null)
 
-  // selection/move state
+  // move-selection state
   const draggingSel = useRef(false)
   const dragStartPDF = useRef(null)
 
@@ -55,11 +52,11 @@ export default function App() {
   const renderTaskRef = useRef(null)
   const renderReqId = useRef(0)
 
-  // panning
+  // pan state
   const isPanning = useRef(false)
   const panPt = useRef({ x: 0, y: 0 })
 
-  /** load libraries */
+  /* Load libs */
   useEffect(() => {
     const go = async () => {
       if (!window.pdfjsLib) {
@@ -84,7 +81,7 @@ export default function App() {
     go()
   }, [])
 
-  /** upload PDF */
+  /* Upload */
   const handleFileUpload = (e) => {
     const file = e.target.files?.[0]
     if (!file || !pdfLib) return
@@ -106,26 +103,20 @@ export default function App() {
     r.readAsArrayBuffer(file)
   }
 
-  /** wheel zoom (needs passive:false) */
+  /* Wheel zoom */
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
     const onWheel = (e) => {
       e.preventDefault()
-      if (e.ctrlKey) {
-        const delta = -e.deltaY
-        setScale(s => Math.min(5, Math.max(0.5, s + delta * 0.002)))
-      } else {
-        const delta = -e.deltaY
-        const step = 0.1
-        setScale(s => Math.min(4, Math.max(0.25, s + (delta > 0 ? step : -step))))
-      }
+      if (e.ctrlKey) setScale(s => Math.min(5, Math.max(0.5, s + (-e.deltaY) * 0.002)))
+      else setScale(s => Math.min(4, Math.max(0.25, s + ((-e.deltaY) > 0 ? 0.1 : -0.1))))
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
   }, [])
 
-  /** render page */
+  /* Render page */
   useEffect(() => { if (pdfDoc) renderPage(pageNum) }, [pdfDoc, pageNum, scale])
   const renderPage = async (n) => {
     renderReqId.current++
@@ -135,8 +126,7 @@ export default function App() {
       const page = await pdfDoc.getPage(n)
       if (renderReqId.current !== req) return
       const viewport = page.getViewport({ scale })
-      const pcan = pdfCanvasRef.current
-      const dcan = drawCanvasRef.current
+      const pcan = pdfCanvasRef.current, dcan = drawCanvasRef.current
       if (!pcan || !dcan) return
       pcan.width = dcan.width = viewport.width
       pcan.height = dcan.height = viewport.height
@@ -153,28 +143,29 @@ export default function App() {
     }
   }
 
-  /** draw all annotations + selection */
+  /* Redraw */
   useEffect(() => { drawAnnotations() }, [annotations, pageNum, scale, isDrawing, startPoint, isFilled, color, lineWidth, selected])
-  const drawAnnotations = () => {
+  const drawAnnotations = (previewPath = null) => {
     const can = drawCanvasRef.current
     if (!can) return
     const ctx = can.getContext('2d')
     ctx.clearRect(0, 0, can.width, can.height)
 
-    const drawOne = (ann, sel = false) => {
+    const drawOne = (ann, highlight = false) => {
       ctx.save()
       ctx.globalCompositeOperation = ann.type === 'eraser' ? 'destination-out' : 'source-over'
-      ctx.strokeStyle = ann.color
+      ctx.strokeStyle = ann.color || '#000'
+      ctx.fillStyle = ann.color || '#000'
       ctx.lineWidth = (ann.width || 2) * scale
-      ctx.fillStyle = ann.color
       ctx.lineCap = 'round'
       ctx.lineJoin = 'round'
 
       if (ann.type === 'pen' || ann.type === 'eraser') {
         ctx.beginPath()
-        if (ann.points.length) {
-          ctx.moveTo(ann.points[0].x * scale, ann.points[0].y * scale)
-          ann.points.forEach(p => ctx.lineTo(p.x * scale, p.y * scale))
+        const pts = ann.points || []
+        if (pts.length) {
+          ctx.moveTo(pts[0].x * scale, pts[0].y * scale)
+          for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x * scale, pts[i].y * scale)
         }
         ctx.stroke()
       } else if (ann.type === 'line') {
@@ -195,121 +186,111 @@ export default function App() {
         if (ann.filled) ctx.fill()
         ctx.stroke()
       } else if (ann.type === 'text') {
-        ctx.font = `${ann.size * scale}px sans-serif`
+        ctx.font = `${(ann.size || 16) * scale}px sans-serif`
         ctx.textBaseline = 'top'
         ctx.fillText(ann.text, ann.x * scale, ann.y * scale)
       }
 
-      // selection highlight
-      if (sel) {
-        ctx.strokeStyle = '#1d4ed8'
-        ctx.lineWidth = 1.5
-        ctx.setLineDash([4, 4])
+      if (highlight) {
+        // simple bbox highlight
         const bb = getAnnBounds(ann)
+        ctx.setLineDash([4, 4])
+        ctx.lineWidth = 1.5
+        ctx.strokeStyle = '#1d4ed8'
         ctx.strokeRect(bb.x * scale, bb.y * scale, bb.w * scale, bb.h * scale)
       }
       ctx.restore()
     }
 
     const list = annotations[pageNum] || []
-    list.forEach((ann, i) =>
-      drawOne(ann, selected.page === pageNum && selected.index === i)
-    )
+    list.forEach((a, i) => drawOne(a, selected.page === pageNum && selected.index === i))
 
-    // preview shapes while drawing
-    if (isDrawing) {
-      const te = can.tempEnd
-      if (!te) return
+    // active previews
+    if (previewPath) drawOne({ type: 'pen', points: previewPath, color, width: lineWidth })
+    if (isDrawing && can.tempEnd && startPoint) {
       const base = { color, width: lineWidth, filled: isFilled }
-      if (activeTool === 'line' && startPoint) drawOne({ ...base, type: 'line', start: startPoint, end: te })
-      if (activeTool === 'rect' && startPoint) drawOne({ ...base, type: 'rect', start: startPoint, end: te })
-      if (activeTool === 'circle' && startPoint) {
-        const r = dist(startPoint, te)
-        drawOne({ ...base, type: 'circle', center: startPoint, radius: r })
-      }
-      if (activeTool === 'pen') drawOne({ ...base, type: 'pen', points: currentPath })
+      if (activeTool === 'line') drawOne({ ...base, type: 'line', start: startPoint, end: can.tempEnd })
+      if (activeTool === 'rect') drawOne({ ...base, type: 'rect', start: startPoint, end: can.tempEnd })
+      if (activeTool === 'circle') drawOne({ ...base, type: 'circle', center: startPoint, radius: dist(startPoint, can.tempEnd) })
     }
   }
 
-  /** get bounding box used for selection */
   const getAnnBounds = (ann) => {
     if (ann.type === 'pen' || ann.type === 'eraser') {
       const xs = ann.points.map(p => p.x), ys = ann.points.map(p => p.y)
       const x = Math.min(...xs), y = Math.min(...ys)
       const w = Math.max(...xs) - x, h = Math.max(...ys) - y
       return { x, y, w, h }
-    } else if (ann.type === 'line') {
-      const x = Math.min(ann.start.x, ann.end.x)
-      const y = Math.min(ann.start.y, ann.end.y)
-      const w = Math.abs(ann.end.x - ann.start.x)
-      const h = Math.abs(ann.end.y - ann.start.y)
-      return { x, y, w, h }
-    } else if (ann.type === 'rect') {
-      const x = Math.min(ann.start.x, ann.end.x)
-      const y = Math.min(ann.start.y, ann.end.y)
-      const w = Math.abs(ann.end.x - ann.start.x)
-      const h = Math.abs(ann.end.y - ann.start.y)
-      return { x, y, w, h }
-    } else if (ann.type === 'circle') {
+    }
+    if (ann.type === 'line') {
+      const x = Math.min(ann.start.x, ann.end.x), y = Math.min(ann.start.y, ann.end.y)
+      return { x, y, w: Math.abs(ann.end.x - ann.start.x), h: Math.abs(ann.end.y - ann.start.y) }
+    }
+    if (ann.type === 'rect') {
+      const x = Math.min(ann.start.x, ann.end.x), y = Math.min(ann.start.y, ann.end.y)
+      return { x, y, w: Math.abs(ann.end.x - ann.start.x), h: Math.abs(ann.end.y - ann.start.y) }
+    }
+    if (ann.type === 'circle') {
       return { x: ann.center.x - ann.radius, y: ann.center.y - ann.radius, w: 2 * ann.radius, h: 2 * ann.radius }
-    } else if (ann.type === 'text') {
-      // approximate text box
-      return { x: ann.x, y: ann.y, w: ann.text.length * (ann.size * 0.6), h: ann.size }
+    }
+    if (ann.type === 'text') {
+      const w = (ann.text?.length || 1) * ((ann.size || 16) * 0.6)
+      return { x: ann.x, y: ann.y, w, h: (ann.size || 16) }
     }
     return { x: 0, y: 0, w: 0, h: 0 }
   }
 
-  /** hit test for selection (pdf coords) */
   const hitTest = (pt) => {
     const list = annotations[pageNum] || []
     for (let i = list.length - 1; i >= 0; i--) {
-      const ann = list[i]
-      if (ann.type === 'line') {
-        // distance to segment
-        const A = ann.start, B = ann.end
+      const a = list[i]
+      if (a.type === 'rect' && pointInRect(pt, a.start, a.end)) return i
+      if (a.type === 'circle' && dist(pt, a.center) <= a.radius) return i
+      if (a.type === 'line') {
+        const A = a.start, B = a.end
         const AB = { x: B.x - A.x, y: B.y - A.y }
         const AP = { x: pt.x - A.x, y: pt.y - A.y }
         const t = Math.max(0, Math.min(1, (AP.x * AB.x + AP.y * AB.y) / (AB.x * AB.x + AB.y * AB.y)))
         const proj = { x: A.x + t * AB.x, y: A.y + t * AB.y }
         if (dist(proj, pt) <= (8 / scale)) return i
-      } else if (ann.type === 'pen' || ann.type === 'eraser') {
-        for (let k = 0; k < ann.points.length - 1; k++) {
-          const A = ann.points[k], B = ann.points[k + 1]
+      }
+      if ((a.type === 'pen' || a.type === 'eraser') && a.points?.length) {
+        for (let k = 0; k < a.points.length - 1; k++) {
+          const A = a.points[k], B = a.points[k + 1]
           const AB = { x: B.x - A.x, y: B.y - A.y }
           const AP = { x: pt.x - A.x, y: pt.y - A.y }
           const t = Math.max(0, Math.min(1, (AP.x * AB.x + AP.y * AB.y) / (AB.x * AB.x + AB.y * AB.y)))
           const proj = { x: A.x + t * AB.x, y: A.y + t * AB.y }
           if (dist(proj, pt) <= (8 / scale)) return i
         }
-      } else if (ann.type === 'rect') {
-        const inside = pointInRect(pt, ann.start, ann.end)
-        if (inside || near(pt.x, ann.start.x, 6 / scale) || near(pt.x, ann.end.x, 6 / scale)) return i
-      } else if (ann.type === 'circle') {
-        const d = dist(pt, ann.center)
-        if (Math.abs(d - ann.radius) <= (8 / scale) || d < ann.radius) return i
-      } else if (ann.type === 'text') {
-        const bb = getAnnBounds(ann)
+      }
+      if (a.type === 'text') {
+        const bb = getAnnBounds(a)
         if (pt.x >= bb.x && pt.x <= bb.x + bb.w && pt.y >= bb.y && pt.y <= bb.y + bb.h) return i
       }
     }
     return -1
   }
 
-  /** coords helpers */
-  const toPdfCoords = (e) => {
+  /* coords */
+  const toPdf = (e) => {
     const can = drawCanvasRef.current
     const r = can.getBoundingClientRect()
     const sx = can.width / r.width, sy = can.height / r.height
-    const x = (e.clientX - r.left) * sx, y = (e.clientY - r.top) * sy
-    return { x: x / scale, y: y / scale }
+    return { x: ((e.clientX - r.left) * sx) / scale, y: ((e.clientY - r.top) * sy) / scale }
   }
 
-  /** draw start / move / stop */
+  /* drawing handlers */
   const onDrawStart = (e) => {
     if (e.button !== 0) return
-    if (activeTool === 'hand') return
+    if (activeTool === 'hand') return // ignore (pan deals with it)
+    if (activeTool === 'text') {
+      const pt = toPdf(e)
+      setTextInput({ x: pt.x, y: pt.y, text: '' })
+      return
+    }
     if (activeTool === 'select') {
-      const pt = toPdfCoords(e)
+      const pt = toPdf(e)
       const idx = hitTest(pt)
       if (idx >= 0) {
         setSelected({ page: pageNum, index: idx })
@@ -320,43 +301,32 @@ export default function App() {
       }
       return
     }
-
-    // text tool: create overlay input
-    if (activeTool === 'text') {
-      const pt = toPdfCoords(e)
-      if (!textInput) setTextInput({ x: pt.x, y: pt.y, text: '' })
-      return
-    }
-
-    const pt = toPdfCoords(e)
+    const pt = toPdf(e)
     setIsDrawing(true)
     setStartPoint(pt)
-    if (activeTool === 'pen' || activeTool === 'eraser') setCurrentPath([pt])
+    if (activeTool === 'pen' || activeTool === 'eraser') {
+      const first = [pt]
+      setCurrentPath(first)
+      drawAnnotations(first) // immediate preview on first point
+    }
   }
+
   const onDrawMove = (e) => {
     if (activeTool === 'hand') return
-    const pt = toPdfCoords(e)
+    const pt = toPdf(e)
 
-    // moving a selected object
+    // move selection
     if (activeTool === 'select' && draggingSel.current && selected.page === pageNum && selected.index != null) {
       const delta = { x: pt.x - dragStartPDF.current.x, y: pt.y - dragStartPDF.current.y }
       dragStartPDF.current = pt
       setAnnotations(prev => {
         const arr = [...(prev[pageNum] || [])]
         const ann = { ...arr[selected.index] }
-        if (ann.type === 'pen' || ann.type === 'eraser') {
-          ann.points = ann.points.map(p => ({ x: p.x + delta.x, y: p.y + delta.y }))
-        } else if (ann.type === 'line') {
-          ann.start = { x: ann.start.x + delta.x, y: ann.start.y + delta.y }
-          ann.end   = { x: ann.end.x + delta.x,   y: ann.end.y + delta.y }
-        } else if (ann.type === 'rect') {
-          ann.start = { x: ann.start.x + delta.x, y: ann.start.y + delta.y }
-          ann.end   = { x: ann.end.x + delta.x,   y: ann.end.y + delta.y }
-        } else if (ann.type === 'circle') {
-          ann.center = { x: ann.center.x + delta.x, y: ann.center.y + delta.y }
-        } else if (ann.type === 'text') {
-          ann.x += delta.x; ann.y += delta.y
-        }
+        if (ann.type === 'pen' || ann.type === 'eraser') ann.points = ann.points.map(p => ({ x: p.x + delta.x, y: p.y + delta.y }))
+        else if (ann.type === 'line') { ann.start = { x: ann.start.x + delta.x, y: ann.start.y + delta.y }; ann.end = { x: ann.end.x + delta.x, y: ann.end.y + delta.y } }
+        else if (ann.type === 'rect') { ann.start = { x: ann.start.x + delta.x, y: ann.start.y + delta.y }; ann.end = { x: ann.end.x + delta.x, y: ann.end.y + delta.y } }
+        else if (ann.type === 'circle') ann.center = { x: ann.center.x + delta.x, y: ann.center.y + delta.y }
+        else if (ann.type === 'text') { ann.x += delta.x; ann.y += delta.y }
         arr[selected.index] = ann
         return { ...prev, [pageNum]: arr }
       })
@@ -364,21 +334,25 @@ export default function App() {
     }
 
     if (!isDrawing) return
-    if (activeTool === 'pen' || activeTool === 'eraser') setCurrentPath(prev => [...prev, pt])
-    else if (['line', 'rect', 'circle'].includes(activeTool)) {
+    if (activeTool === 'pen' || activeTool === 'eraser') {
+      setCurrentPath(prev => {
+        const next = [...prev, pt]
+        drawAnnotations(next) // immediate stroke preview
+        return next
+      })
+    } else if (['line', 'rect', 'circle'].includes(activeTool)) {
       const can = drawCanvasRef.current
       can.tempEnd = pt
       drawAnnotations()
     }
   }
+
   const onDrawEnd = () => {
     if (activeTool === 'select') { draggingSel.current = false; return }
     if (!isDrawing) return
-    const can = drawCanvasRef.current
-    const te = can?.tempEnd || null
+    const te = drawCanvasRef.current?.tempEnd || null
     const base = { color: activeTool === 'eraser' ? '#ffffff' : color, width: activeTool === 'eraser' ? 20 : lineWidth, filled: isFilled }
     let newAnn = null
-
     if (activeTool === 'pen' || activeTool === 'eraser') newAnn = { ...base, type: activeTool, points: currentPath }
     else if (activeTool === 'line' && startPoint && te) newAnn = { ...base, type: 'line', start: startPoint, end: te }
     else if (activeTool === 'rect' && startPoint && te) newAnn = { ...base, type: 'rect', start: startPoint, end: te }
@@ -391,7 +365,7 @@ export default function App() {
     if (drawCanvasRef.current) drawCanvasRef.current.tempEnd = null
   }
 
-  /** text finalize / keyboard */
+  /* text handlers */
   const onTextKey = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
@@ -400,14 +374,14 @@ export default function App() {
   }
   const finalizeText = () => {
     if (!textInput) return
-    const txt = textInput.text.trim()
-    if (!txt) { setTextInput(null); return }
-    const ann = { type: 'text', x: textInput.x, y: textInput.y, text: txt, color, size: 16 }
+    const t = textInput.text.trim()
+    if (!t) { setTextInput(null); return }
+    const ann = { type: 'text', x: textInput.x, y: textInput.y, text: t, color, size: 16 }
     setAnnotations(p => ({ ...p, [pageNum]: [ ...(p[pageNum] || []), ann ] }))
     setTextInput(null)
   }
 
-  /** selection duplication */
+  /* duplicate */
   const duplicateSelection = () => {
     if (selected.page !== pageNum || selected.index == null) return
     setAnnotations(prev => {
@@ -415,21 +389,23 @@ export default function App() {
       const src = arr[selected.index]
       if (!src) return prev
       const shift = 8 / scale
-      const copyAnn = JSON.parse(JSON.stringify(src))
       const shiftPt = (p) => ({ x: p.x + shift, y: p.y + shift })
-      if (copyAnn.type === 'pen' || copyAnn.type === 'eraser') copyAnn.points = copyAnn.points.map(shiftPt)
-      else if (copyAnn.type === 'line') { copyAnn.start = shiftPt(copyAnn.start); copyAnn.end = shiftPt(copyAnn.end) }
-      else if (copyAnn.type === 'rect') { copyAnn.start = shiftPt(copyAnn.start); copyAnn.end = shiftPt(copyAnn.end) }
-      else if (copyAnn.type === 'circle') copyAnn.center = shiftPt(copyAnn.center)
-      else if (copyAnn.type === 'text') { copyAnn.x += shift; copyAnn.y += shift }
-      arr.push(copyAnn)
+      const copy = JSON.parse(JSON.stringify(src))
+      if (copy.type === 'pen' || copy.type === 'eraser') copy.points = copy.points.map(shiftPt)
+      else if (copy.type === 'line') { copy.start = shiftPt(copy.start); copy.end = shiftPt(copy.end) }
+      else if (copy.type === 'rect') { copy.start = shiftPt(copy.start); copy.end = shiftPt(copy.end) }
+      else if (copy.type === 'circle') copy.center = shiftPt(copy.center)
+      else if (copy.type === 'text') { copy.x += shift; copy.y += shift }
+      arr.push(copy)
       return { ...prev, [pageNum]: arr }
     })
   }
 
-  /** pan with middle/right mouse */
+  /* PAN: works with hand tool (left/middle/right) */
   const onPanDown = (e) => {
-    if (activeTool !== 'hand' && e.button !== 1 && e.button !== 2) return
+    const handActive = activeTool === 'hand'
+    const wantsPan = handActive ? (e.button === 0 || e.button === 1 || e.button === 2) : (e.button === 1 || e.button === 2)
+    if (!wantsPan) return
     e.preventDefault()
     isPanning.current = true
     panPt.current = { x: e.clientX, y: e.clientY }
@@ -446,7 +422,7 @@ export default function App() {
   const onPanUp = () => { isPanning.current = false }
   const onContextMenu = (e) => e.preventDefault()
 
-  /** export */
+  /* export */
   const exportPDF = async () => {
     if (!pdfDoc || !jspdfLib) return
     const { jsPDF } = jspdfLib
@@ -454,7 +430,6 @@ export default function App() {
     doc.deletePage(1)
     const total = pdfDoc.numPages
     const S = 2
-
     for (let i = 1; i <= total; i++) {
       const page = await pdfDoc.getPage(i)
       const base = page.getViewport({ scale: 1 })
@@ -464,12 +439,11 @@ export default function App() {
       c.width = vp.width; c.height = vp.height
       const ctx = c.getContext('2d')
       await page.render({ canvasContext: ctx, viewport: vp }).promise
-
       const anns = annotations[i] || []
       anns.forEach(a => {
         ctx.save()
         ctx.globalCompositeOperation = a.type === 'eraser' ? 'destination-out' : 'source-over'
-        ctx.strokeStyle = a.color; ctx.fillStyle = a.color; ctx.lineCap = 'round'; ctx.lineJoin = 'round'
+        ctx.strokeStyle = a.color || '#000'; ctx.fillStyle = a.color || '#000'; ctx.lineCap = 'round'; ctx.lineJoin = 'round'
         ctx.lineWidth = (a.width || 2) * S
         if (a.type === 'pen' || a.type === 'eraser') {
           ctx.beginPath()
@@ -478,44 +452,33 @@ export default function App() {
             a.points.forEach(p => ctx.lineTo(p.x * S, p.y * S))
           }
           ctx.stroke()
-        } else if (a.type === 'line') {
-          ctx.beginPath(); ctx.moveTo(a.start.x * S, a.start.y * S); ctx.lineTo(a.end.x * S, a.end.y * S); ctx.stroke()
-        } else if (a.type === 'rect') {
-          const x = a.start.x * S, y = a.start.y * S, w = (a.end.x - a.start.x) * S, h = (a.end.y - a.start.y) * S
-          ctx.beginPath(); ctx.rect(x, y, w, h); if (a.filled) ctx.fill(); ctx.stroke()
-        } else if (a.type === 'circle') {
-          ctx.beginPath(); ctx.arc(a.center.x * S, a.center.y * S, a.radius * S, 0, Math.PI * 2); if (a.filled) ctx.fill(); ctx.stroke()
-        } else if (a.type === 'text') {
-          ctx.font = `${(a.size || 16) * S}px sans-serif`; ctx.textBaseline = 'top'; ctx.fillText(a.text, a.x * S, a.y * S)
-        }
+        } else if (a.type === 'line') { ctx.beginPath(); ctx.moveTo(a.start.x * S, a.start.y * S); ctx.lineTo(a.end.x * S, a.end.y * S); ctx.stroke() }
+        else if (a.type === 'rect') { const x = a.start.x*S, y = a.start.y*S, w = (a.end.x-a.start.x)*S, h=(a.end.y-a.start.y)*S; ctx.beginPath(); ctx.rect(x,y,w,h); if (a.filled) ctx.fill(); ctx.stroke() }
+        else if (a.type === 'circle') { ctx.beginPath(); ctx.arc(a.center.x * S, a.center.y * S, a.radius * S, 0, Math.PI*2); if (a.filled) ctx.fill(); ctx.stroke() }
+        else if (a.type === 'text') { ctx.font = `${(a.size||16)*S}px sans-serif`; ctx.textBaseline='top'; ctx.fillText(a.text, a.x*S, a.y*S) }
         ctx.restore()
       })
-
       const img = c.toDataURL('image/jpeg', 0.95)
       doc.addImage(img, 'JPEG', 0, 0, base.width, base.height)
     }
     doc.save(`edited_${fileName}`)
   }
 
-  /** UI */
-
   return (
     <div className="flex flex-col h-screen bg-gray-100">
       {/* Toolbar */}
       <div className="toolbar flex items-center justify-between gap-4">
         <div className="flex items-center gap-4">
-          {/* upload */}
           <div className="flex items-center gap-2 bg-gray-50 p-1 rounded-lg border">
-            <button className="icon-btn" onClick={() => fileInputRef.current.click()}>
+            <button className="icon-btn" onClick={()=>fileInputRef.current.click()}>
               <Upload size={18} /><span className="text-sm">&nbsp;Upload</span>
             </button>
             <input ref={fileInputRef} type="file" accept=".pdf" className="hidden" onChange={handleFileUpload} />
           </div>
 
-          {/* tools */}
           <div className="flex items-center gap-1 bg-gray-50 p-1 rounded-lg border">
-            <Tool active={activeTool==='select'} onClick={()=>setActiveTool('select')} icon={<MousePointer size={18} />} label="Select/Move" />
-            <Tool active={activeTool==='hand'} onClick={()=>setActiveTool('hand')} icon={<span style={{fontSize:12}}>👋</span>} label="Pan (hand / mid/right mouse)" />
+            <Tool active={activeTool==='select'} onClick={()=>setActiveTool('select')} icon={<MousePointer size={18} />} label="Select / Move" />
+            <Tool active={activeTool==='hand'} onClick={()=>setActiveTool('hand')} icon={<span style={{fontSize:12}}>👋</span>} label="Pan (Hand)" />
             <div className="icon-btn" style={{cursor:'default', opacity:.35}}>|</div>
             <Tool active={activeTool==='pen'} onClick={()=>setActiveTool('pen')} icon={<Pen size={18} />} label="Pen" />
             <Tool active={activeTool==='eraser'} onClick={()=>setActiveTool('eraser')} icon={<Eraser size={18} />} label="Eraser" />
@@ -526,17 +489,13 @@ export default function App() {
             <Tool active={activeTool==='text'} onClick={()=>setActiveTool('text')} icon={<Type size={18} />} label="Text" />
           </div>
 
-          {/* style */}
           <div className="flex items-center gap-3">
             <input type="color" value={color} onChange={(e)=>setColor(e.target.value)} className="icon-btn" title="Color" />
-            <button className={`icon-btn ${isFilled?'icon-btn-active':''}`} onClick={()=>setIsFilled(v=>!v)} title="Fill (for rect/circle)">
+            <button className={`icon-btn ${isFilled?'icon-btn-active':''}`} onClick={()=>setIsFilled(v=>!v)} title="Fill (rect/circle)">
               <PaintBucket size={18} />
             </button>
             <div className="flex items-center gap-2">
-              <input
-                type="range" min="1" max="10" value={lineWidth}
-                onChange={e=>setLineWidth(parseInt(e.target.value))}
-              />
+              <input type="range" min="1" max="10" value={lineWidth} onChange={e=>setLineWidth(parseInt(e.target.value))} />
               <span className="text-xs">{lineWidth}px</span>
             </div>
           </div>
@@ -557,13 +516,14 @@ export default function App() {
       <div
         ref={scrollRef}
         className="flex-1 overflow-auto bg-gray-200/60 relative py-8 flex justify-center no-scrollbar"
-        onMouseDown={(e)=>{ onPanDown(e); }}
+        onMouseDown={onPanDown}
         onMouseMove={onPanMove}
         onMouseUp={onPanUp}
         onMouseLeave={onPanUp}
         onContextMenu={onContextMenu}
+        style={{ cursor: isPanning.current || activeTool==='hand' ? 'grab' : 'default' }}
       >
-        {/* IMPORTANT: put horizontal gutter INSIDE the scroll content (so pan reaches the edges) */}
+        {/* keep a small inner gutter so you can pan fully to edges */}
         <div className="mx-8">
           {!pdfDoc ? (
             <div className="bg-white p-8 rounded-lg shadow-sm" style={{marginTop:80}}>
@@ -575,12 +535,18 @@ export default function App() {
           ) : (
             <div
               className="relative shadow-xl origin-top-left"
-              style={{ width: 'fit-content', height: 'fit-content', cursor: isPanning.current ? 'grabbing' : (activeTool==='select' ? 'default' : 'crosshair') }}
+              style={{
+                width: 'fit-content',
+                height: 'fit-content',
+                cursor: isPanning.current ? 'grabbing' : (activeTool==='select' ? 'default' : (activeTool==='hand' ? 'grab' : 'crosshair'))
+              }}
             >
               <canvas ref={pdfCanvasRef} className="bg-white block" />
               <canvas
                 ref={drawCanvasRef}
                 className="absolute top-0 left-0"
+                // IMPORTANT: disable pointer events in hand mode so the parent gets the drag
+                style={{ pointerEvents: activeTool === 'hand' ? 'none' : 'auto' }}
                 onMouseDown={onDrawStart}
                 onMouseMove={onDrawMove}
                 onMouseUp={onDrawEnd}
@@ -595,7 +561,7 @@ export default function App() {
                     onKeyDown={onTextKey}
                     onBlur={finalizeText}
                     className="bg-white border rounded-lg p-1"
-                    style={{ font: `${16 * scale}px sans-serif`, minWidth: 120 }}
+                    style={{ font: `${16 * scale}px sans-serif`, minWidth: 120, color }}
                     placeholder="Type…"
                     onMouseDown={(e)=>e.stopPropagation()}
                   />
@@ -606,7 +572,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* Footer / Pagination */}
       {pdfDoc && (
         <div className="bg-white border-t p-2 flex items-center justify-between">
           <div className="flex items-center gap-2">
