@@ -3,6 +3,8 @@ import {
   Upload,
   Pen,
   Minus,
+  Type,
+  ArrowRight,
   ChevronLeft,
   ChevronRight,
   RotateCcw,
@@ -15,49 +17,12 @@ import {
   Circle,
   Eraser,
   PaintBucket,
-  X,
-  Loader2,
-  Bot,
 } from 'lucide-react';
 
 // External libraries
 const PDFJS_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
 const PDFJS_WORKER_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 const JSPDF_URL = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
-
-// --- Gemini API Helper (kept, but Analyze button removed) ---
-const callGemini = async (prompt, systemInstruction = "") => {
-  const apiKey = ""; // Injected at runtime
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
-
-  const payload = {
-    contents: [{ parts: [{ text: prompt }] }],
-    systemInstruction: systemInstruction ? { parts: [{ text: systemInstruction }] } : undefined,
-  };
-
-  let delay = 1000;
-  for (let i = 0; i < 5; i++) {
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      if (!response.ok) {
-        if (response.status === 429) throw new Error('Too Many Requests');
-        throw new Error(`API Error: ${response.status}`);
-      }
-
-      const data = await response.json();
-      return data.candidates?.[0]?.content?.parts?.[0]?.text || "No response generated.";
-    } catch (error) {
-      if (i === 4) throw error;
-      await new Promise(r => setTimeout(r, delay));
-      delay *= 2;
-    }
-  }
-};
 
 const App = () => {
   const [pdfLib, setPdfLib] = useState(null);
@@ -67,13 +32,13 @@ const App = () => {
   const [scale, setScale] = useState(1.5);
   const [fileName, setFileName] = useState("document.pdf");
 
-  // Tools: 'cursor', 'pen', 'line', 'rect', 'circle', 'eraser'
+  // Tools: 'cursor', 'pen', 'line', 'arrow', 'rect', 'circle', 'text', 'eraser'
   const [activeTool, setActiveTool] = useState('cursor');
   const [color, setColor] = useState('#EF4444');
   const [lineWidth, setLineWidth] = useState(3);
   const [isFilled, setIsFilled] = useState(false);
 
-  // Annotations store
+  // Annotations store: { pageNum: [ ... ] }
   const [annotations, setAnnotations] = useState({});
 
   // Drawing state
@@ -81,10 +46,9 @@ const App = () => {
   const [currentPath, setCurrentPath] = useState([]);
   const [startPoint, setStartPoint] = useState(null);
 
-  // AI State (kept but unused in UI)
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analysisResult, setAnalysisResult] = useState(null);
-  const [showAnalysisModal, setShowAnalysisModal] = useState(false);
+  // Text input overlay state
+  const [textInput, setTextInput] = useState(null); // { x, y, text } in PDF coords
+  const ignoreBlurRef = useRef(false);
 
   const canvasRef = useRef(null);
   const pdfCanvasRef = useRef(null);
@@ -146,6 +110,7 @@ const App = () => {
         setPdfDoc(pdf);
         setPageNum(1);
         setAnnotations({});
+        setTextInput(null);
       } catch (error) {
         console.error('Error loading PDF:', error);
         alert('Error parsing PDF. Please try another file.');
@@ -221,10 +186,6 @@ const App = () => {
           viewport: viewport
         };
 
-        if (renderTaskRef.current) {
-          try { await renderTaskRef.current.cancel(); } catch (_) {}
-        }
-
         const renderTask = page.render(renderContext);
         renderTaskRef.current = renderTask;
 
@@ -276,7 +237,7 @@ const App = () => {
     e.preventDefault();
   };
 
-  // --- Drawing Logic ---
+  // --- Coordinates ---
   const getPdfCoordinates = (e) => {
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
@@ -289,15 +250,61 @@ const App = () => {
     return { x: canvasX / scale, y: canvasY / scale };
   };
 
+  // --- Text finalize ---
+  const finalizeText = () => {
+    if (ignoreBlurRef.current) return;
+    if (!textInput) return;
+
+    const t = (textInput.text || '').trim();
+    if (!t) {
+      setTextInput(null);
+      return;
+    }
+
+    const newAnn = {
+      type: 'text',
+      x: textInput.x,
+      y: textInput.y,
+      text: textInput.text,
+      color,
+      size: 16
+    };
+
+    setAnnotations(prev => ({
+      ...prev,
+      [pageNum]: [...(prev[pageNum] || []), newAnn]
+    }));
+    setTextInput(null);
+  };
+
+  const handleTextSubmit = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      finalizeText();
+    }
+  };
+
+  // --- Drawing ---
   const startDrawing = (e) => {
     if (e.button !== 0) return;
 
     // Cursor tool -> pan handled by container
     if (activeTool === 'cursor') return;
-
     if (isPanning.current) return;
 
     const coords = getPdfCoordinates(e);
+
+    if (activeTool === 'text') {
+      // Commit existing textbox and start new one
+      if (textInput) {
+        ignoreBlurRef.current = true;
+        finalizeText();
+        // allow finalizeText() state to settle before placing new box
+        setTimeout(() => { ignoreBlurRef.current = false; }, 50);
+      }
+      setTextInput({ x: coords.x, y: coords.y, text: '' });
+      return;
+    }
 
     setIsDrawing(true);
     setStartPoint(coords);
@@ -313,7 +320,7 @@ const App = () => {
 
     if (activeTool === 'pen' || activeTool === 'eraser') {
       setCurrentPath(prev => [...prev, coords]);
-    } else if (['line', 'rect', 'circle'].includes(activeTool)) {
+    } else if (['line', 'arrow', 'rect', 'circle'].includes(activeTool)) {
       canvasRef.current.tempEnd = coords;
       drawAnnotations();
     }
@@ -323,9 +330,7 @@ const App = () => {
     if (!isDrawing) return;
     const coords = getPdfCoordinates(e);
 
-    const pageAnns = annotations[pageNum] || [];
     let newAnn = null;
-
     const baseProps = {
       color: activeTool === 'eraser' ? '#ffffff' : color,
       width: activeTool === 'eraser' ? 20 : lineWidth,
@@ -335,6 +340,8 @@ const App = () => {
       newAnn = { ...baseProps, type: activeTool, points: currentPath };
     } else if (activeTool === 'line') {
       newAnn = { ...baseProps, type: 'line', start: startPoint, end: coords };
+    } else if (activeTool === 'arrow') {
+      newAnn = { ...baseProps, type: 'arrow', start: startPoint, end: coords };
     } else if (activeTool === 'rect') {
       newAnn = { ...baseProps, type: 'rect', start: startPoint, end: coords, filled: isFilled };
     } else if (activeTool === 'circle') {
@@ -353,6 +360,32 @@ const App = () => {
     setCurrentPath([]);
     setStartPoint(null);
     if (canvasRef.current) canvasRef.current.tempEnd = null;
+  };
+
+  // --- Arrow drawing helper ---
+  const strokeArrow = (ctx, x1, y1, x2, y2, headLenPx) => {
+    // Line
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+
+    // Head
+    const angle = Math.atan2(y2 - y1, x2 - x1);
+    const a1 = angle - Math.PI / 7;
+    const a2 = angle + Math.PI / 7;
+
+    const hx1 = x2 - headLenPx * Math.cos(a1);
+    const hy1 = y2 - headLenPx * Math.sin(a1);
+    const hx2 = x2 - headLenPx * Math.cos(a2);
+    const hy2 = y2 - headLenPx * Math.sin(a2);
+
+    ctx.beginPath();
+    ctx.moveTo(x2, y2);
+    ctx.lineTo(hx1, hy1);
+    ctx.moveTo(x2, y2);
+    ctx.lineTo(hx2, hy2);
+    ctx.stroke();
   };
 
   const drawAnnotations = () => {
@@ -385,6 +418,13 @@ const App = () => {
         ctx.moveTo(ann.start.x * scale, ann.start.y * scale);
         ctx.lineTo(ann.end.x * scale, ann.end.y * scale);
         ctx.stroke();
+      } else if (ann.type === 'arrow') {
+        const x1 = ann.start.x * scale;
+        const y1 = ann.start.y * scale;
+        const x2 = ann.end.x * scale;
+        const y2 = ann.end.y * scale;
+        const head = Math.max(10, ann.width * 3) * scale;
+        strokeArrow(ctx, x1, y1, x2, y2, head);
       } else if (ann.type === 'rect') {
         const x = ann.start.x * scale;
         const y = ann.start.y * scale;
@@ -399,6 +439,10 @@ const App = () => {
         ctx.arc(ann.center.x * scale, ann.center.y * scale, ann.radius * scale, 0, 2 * Math.PI);
         if (ann.filled) ctx.fill();
         ctx.stroke();
+      } else if (ann.type === 'text') {
+        ctx.font = `${ann.size * scale}px sans-serif`;
+        ctx.textBaseline = 'top';
+        ctx.fillText(ann.text, ann.x * scale, ann.y * scale);
       }
 
       ctx.restore();
@@ -407,6 +451,7 @@ const App = () => {
     const pageAnns = annotations[pageNum] || [];
     pageAnns.forEach(drawItem);
 
+    // Preview while drawing
     if (isDrawing) {
       const tempEnd = canvas.tempEnd;
       if (activeTool === 'pen' || activeTool === 'eraser') {
@@ -419,6 +464,8 @@ const App = () => {
       } else if (startPoint && tempEnd) {
         if (activeTool === 'line') {
           drawItem({ type: 'line', start: startPoint, end: tempEnd, color, width: lineWidth });
+        } else if (activeTool === 'arrow') {
+          drawItem({ type: 'arrow', start: startPoint, end: tempEnd, color, width: lineWidth });
         } else if (activeTool === 'rect') {
           drawItem({ type: 'rect', start: startPoint, end: tempEnd, color, width: lineWidth, filled: isFilled });
         } else if (activeTool === 'circle') {
@@ -449,6 +496,29 @@ const App = () => {
     doc.deletePage(1);
     const totalPages = pdfDoc.numPages;
     const exportScale = 2.0;
+
+    const strokeArrowExport = (ctx, x1, y1, x2, y2, headLenPx) => {
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+
+      const angle = Math.atan2(y2 - y1, x2 - x1);
+      const a1 = angle - Math.PI / 7;
+      const a2 = angle + Math.PI / 7;
+
+      const hx1 = x2 - headLenPx * Math.cos(a1);
+      const hy1 = y2 - headLenPx * Math.sin(a1);
+      const hx2 = x2 - headLenPx * Math.cos(a2);
+      const hy2 = y2 - headLenPx * Math.sin(a2);
+
+      ctx.beginPath();
+      ctx.moveTo(x2, y2);
+      ctx.lineTo(hx1, hy1);
+      ctx.moveTo(x2, y2);
+      ctx.lineTo(hx2, hy2);
+      ctx.stroke();
+    };
 
     for (let i = 1; i <= totalPages; i++) {
       const page = await pdfDoc.getPage(i);
@@ -493,12 +563,18 @@ const App = () => {
           ctx.moveTo(ann.start.x * s, ann.start.y * s);
           ctx.lineTo(ann.end.x * s, ann.end.y * s);
           ctx.stroke();
+        } else if (ann.type === 'arrow') {
+          const x1 = ann.start.x * s;
+          const y1 = ann.start.y * s;
+          const x2 = ann.end.x * s;
+          const y2 = ann.end.y * s;
+          const head = Math.max(10, ann.width * 3) * s;
+          strokeArrowExport(ctx, x1, y1, x2, y2, head);
         } else if (ann.type === 'rect') {
           const rx = ann.start.x * s;
           const ry = ann.start.y * s;
           const rw = (ann.end.x - ann.start.x) * s;
           const rh = (ann.end.y - ann.start.y) * s;
-
           ctx.beginPath();
           ctx.rect(rx, ry, rw, rh);
           if (ann.filled) ctx.fill();
@@ -508,7 +584,12 @@ const App = () => {
           ctx.arc(ann.center.x * s, ann.center.y * s, ann.radius * s, 0, 2 * Math.PI);
           if (ann.filled) ctx.fill();
           ctx.stroke();
+        } else if (ann.type === 'text') {
+          ctx.font = `${ann.size * s}px sans-serif`;
+          ctx.textBaseline = 'top';
+          ctx.fillText(ann.text, ann.x * s, ann.y * s);
         }
+
         ctx.restore();
       });
 
@@ -543,7 +624,7 @@ const App = () => {
 
           <div className="h-6 w-px bg-gray-300 mx-2"></div>
 
-          {/* Tool Buttons (TEXT removed) */}
+          {/* Tool Buttons */}
           <div className="flex items-center gap-1 bg-gray-50 p-1 rounded-lg border overflow-x-auto max-w-[50vw] sm:max-w-none no-scrollbar">
             <ToolButton
               active={activeTool === 'cursor'}
@@ -571,6 +652,12 @@ const App = () => {
               label="Line"
             />
             <ToolButton
+              active={activeTool === 'arrow'}
+              onClick={() => setActiveTool('arrow')}
+              icon={<ArrowRight size={18} />}
+              label="Arrow"
+            />
+            <ToolButton
               active={activeTool === 'rect'}
               onClick={() => setActiveTool('rect')}
               icon={<Square size={18} />}
@@ -581,6 +668,12 @@ const App = () => {
               onClick={() => setActiveTool('circle')}
               icon={<Circle size={18} />}
               label="Circle"
+            />
+            <ToolButton
+              active={activeTool === 'text'}
+              onClick={() => setActiveTool('text')}
+              icon={<Type size={18} />}
+              label="Text"
             />
           </div>
 
@@ -694,6 +787,7 @@ const App = () => {
               }}
             >
               <canvas ref={pdfCanvasRef} className="bg-white block" />
+
               <canvas
                 ref={canvasRef}
                 className="absolute top-0 left-0"
@@ -702,6 +796,33 @@ const App = () => {
                 onMouseUp={stopDrawing}
                 onMouseLeave={stopDrawing}
               />
+
+              {/* Text Input Overlay */}
+              {textInput && (
+                <div
+                  className="absolute z-50 flex items-center"
+                  style={{
+                    left: textInput.x * scale,
+                    top: (textInput.y * scale) - 8
+                  }}
+                >
+                  <input
+                    autoFocus
+                    value={textInput.text}
+                    onChange={(e) => setTextInput({ ...textInput, text: e.target.value })}
+                    onBlur={finalizeText}
+                    onKeyDown={handleTextSubmit}
+                    className="bg-white border border-blue-500 rounded px-2 py-1 outline-none shadow-lg min-w-[200px]"
+                    style={{
+                      font: `${16 * scale}px sans-serif`,
+                      color: color,
+                      lineHeight: 1.2
+                    }}
+                    placeholder="Type… (Enter to save)"
+                    onMouseDown={(e) => e.stopPropagation()}
+                  />
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -742,48 +863,6 @@ const App = () => {
 
           <div className="text-xs text-gray-400 max-w-[200px] truncate">
             {fileName}
-          </div>
-        </div>
-      )}
-
-      {/* Analysis Modal (button removed, but modal kept in case you re-add later) */}
-      {showAnalysisModal && (
-        <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col">
-            <div className="p-4 border-b flex justify-between items-center bg-indigo-50 rounded-t-xl">
-              <div className="flex items-center gap-2 text-indigo-900 font-semibold">
-                <Bot size={20} />
-                <span>Page {pageNum} Analysis</span>
-              </div>
-              <button
-                onClick={() => setShowAnalysisModal(false)}
-                className="p-1 hover:bg-indigo-100 rounded-full text-indigo-700"
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            <div className="p-6 overflow-y-auto">
-              {isAnalyzing ? (
-                <div className="flex flex-col items-center justify-center py-8 text-gray-500 gap-3">
-                  <Loader2 size={32} className="animate-spin text-indigo-500" />
-                  <p>Analyzing text content...</p>
-                </div>
-              ) : (
-                <div className="prose prose-sm max-w-none text-gray-700 whitespace-pre-wrap">
-                  {analysisResult}
-                </div>
-              )}
-            </div>
-
-            <div className="p-4 border-t bg-gray-50 rounded-b-xl flex justify-end">
-              <button
-                onClick={() => setShowAnalysisModal(false)}
-                className="px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700 font-medium"
-              >
-                Close
-              </button>
-            </div>
           </div>
         </div>
       )}
