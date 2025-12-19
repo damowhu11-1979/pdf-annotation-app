@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Upload,
   Pen,
@@ -19,68 +19,48 @@ import {
   PaintBucket,
   Sparkles,
   Loader2,
-} from "lucide-react";
+  Bot,
+  X
+} from 'lucide-react';
 
 // External libraries
-const PDFJS_URL =
-  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
-const PDFJS_WORKER_URL =
-  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-const JSPDF_URL =
-  "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+const PDFJS_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+const PDFJS_WORKER_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+const JSPDF_URL = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
 
-// --- Gemini API Helper (only used for text polish button) ---
+// --- Gemini API Helper ---
 const callGemini = async (prompt, systemInstruction = "") => {
   const apiKey = ""; // Injected at runtime or pasted by user
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
 
   const payload = {
     contents: [{ parts: [{ text: prompt }] }],
-    systemInstruction: systemInstruction
-      ? { parts: [{ text: systemInstruction }] }
-      : undefined,
+    systemInstruction: systemInstruction ? { parts: [{ text: systemInstruction }] } : undefined,
   };
 
   let delay = 1000;
   for (let i = 0; i < 5; i++) {
     try {
       const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
       });
 
       if (!response.ok) {
-        if (response.status === 429) throw new Error("Too Many Requests");
+        if (response.status === 429) throw new Error('Too Many Requests');
         throw new Error(`API Error: ${response.status}`);
       }
 
       const data = await response.json();
-      return (
-        data.candidates?.[0]?.content?.parts?.[0]?.text || "No response generated."
-      );
+      return data.candidates?.[0]?.content?.parts?.[0]?.text || "No response generated.";
     } catch (error) {
       if (i === 4) throw error;
-      await new Promise((r) => setTimeout(r, delay));
+      await new Promise(r => setTimeout(r, delay));
       delay *= 2;
     }
   }
 };
-
-const ToolButton = ({ active, onClick, icon, label }) => (
-  <button
-    type="button"
-    onClick={onClick}
-    title={label}
-    className={[
-      "h-9 w-9 rounded-md grid place-items-center transition",
-      "text-gray-600 hover:bg-gray-100",
-      active ? "bg-blue-50 text-blue-700 ring-1 ring-blue-200" : "",
-    ].join(" ")}
-  >
-    {icon}
-  </button>
-);
 
 const App = () => {
   const [pdfLib, setPdfLib] = useState(null);
@@ -91,8 +71,8 @@ const App = () => {
   const [fileName, setFileName] = useState("document.pdf");
 
   // Tools: 'cursor', 'pen', 'line', 'arrow', 'rect', 'circle', 'text', 'eraser'
-  const [activeTool, setActiveTool] = useState("cursor");
-  const [color, setColor] = useState("#EF4444");
+  const [activeTool, setActiveTool] = useState('cursor');
+  const [color, setColor] = useState('#EF4444');
   const [lineWidth, setLineWidth] = useState(3);
   const [fontSize, setFontSize] = useState(16);
   const [isFilled, setIsFilled] = useState(false);
@@ -109,7 +89,7 @@ const App = () => {
   const [textInput, setTextInput] = useState(null); // { x, y, text } in PDF coords
   const textInputRef = useRef(null);
 
-  // AI State (polish)
+  // AI State
   const [isPolishing, setIsPolishing] = useState(false);
 
   const canvasRef = useRef(null);
@@ -119,7 +99,7 @@ const App = () => {
   const renderTaskRef = useRef(null);
   const renderRequestRef = useRef(0);
 
-  // Panning State (global pointer listeners)
+  // Panning State
   const isPanning = useRef(false);
   const [isPanningState, setIsPanningState] = useState(false);
   const startPan = useRef({ x: 0, y: 0, sl: 0, st: 0 });
@@ -128,46 +108,50 @@ const App = () => {
   const dragAnnRef = useRef({
     active: false,
     index: -1,
-    start: { x: 0, y: 0 }, // PDF coords
+    start: { x: 0, y: 0 },
     original: null,
   });
 
   const [selectedIndex, setSelectedIndex] = useState(-1);
 
-  // ---------- Helpers ----------
+  // ✅ FIX: helper to detect clicking UI elements (prevents pan stealing clicks)
+  const isInteractiveTarget = (target) => {
+    if (!target || typeof target.closest !== 'function') return false;
+    return !!target.closest(
+      'button, input, textarea, select, option, a, label, [role="button"]'
+    );
+  };
+
+  // --------- Helpers: deep copy + translate annotation ----------
   const deepCopyAnn = (ann) => JSON.parse(JSON.stringify(ann));
 
   const translateAnn = (ann, dx, dy) => {
     const a = deepCopyAnn(ann);
-    if (a.type === "pen" || a.type === "eraser") {
-      a.points = a.points.map((p) => ({ x: p.x + dx, y: p.y + dy }));
-    } else if (a.type === "line" || a.type === "arrow") {
+    if (a.type === 'pen' || a.type === 'eraser') {
+      a.points = a.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
+    } else if (a.type === 'line' || a.type === 'arrow') {
       a.start = { x: a.start.x + dx, y: a.start.y + dy };
       a.end = { x: a.end.x + dx, y: a.end.y + dy };
-    } else if (a.type === "rect") {
+    } else if (a.type === 'rect') {
       a.start = { x: a.start.x + dx, y: a.start.y + dy };
       a.end = { x: a.end.x + dx, y: a.end.y + dy };
-    } else if (a.type === "circle") {
+    } else if (a.type === 'circle') {
       a.center = { x: a.center.x + dx, y: a.center.y + dy };
-    } else if (a.type === "text") {
+    } else if (a.type === 'text') {
       a.x = a.x + dx;
       a.y = a.y + dy;
     }
     return a;
   };
 
+  // --------- Helpers: bounding boxes / hit testing ----------
   const annBBoxPdf = (ann) => {
-    if (ann.type === "pen" || ann.type === "eraser") {
-      const xs = ann.points.map((p) => p.x);
-      const ys = ann.points.map((p) => p.y);
-      return {
-        minX: Math.min(...xs),
-        maxX: Math.max(...xs),
-        minY: Math.min(...ys),
-        maxY: Math.max(...ys),
-      };
+    if (ann.type === 'pen' || ann.type === 'eraser') {
+      const xs = ann.points.map(p => p.x);
+      const ys = ann.points.map(p => p.y);
+      return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
     }
-    if (ann.type === "line" || ann.type === "arrow") {
+    if (ann.type === 'line' || ann.type === 'arrow') {
       return {
         minX: Math.min(ann.start.x, ann.end.x),
         maxX: Math.max(ann.start.x, ann.end.x),
@@ -175,7 +159,7 @@ const App = () => {
         maxY: Math.max(ann.start.y, ann.end.y),
       };
     }
-    if (ann.type === "rect") {
+    if (ann.type === 'rect') {
       return {
         minX: Math.min(ann.start.x, ann.end.x),
         maxX: Math.max(ann.start.x, ann.end.x),
@@ -183,7 +167,7 @@ const App = () => {
         maxY: Math.max(ann.start.y, ann.end.y),
       };
     }
-    if (ann.type === "circle") {
+    if (ann.type === 'circle') {
       return {
         minX: ann.center.x - ann.radius,
         maxX: ann.center.x + ann.radius,
@@ -191,7 +175,7 @@ const App = () => {
         maxY: ann.center.y + ann.radius,
       };
     }
-    if (ann.type === "text") {
+    if (ann.type === 'text') {
       const w = Math.max(10, (ann.text?.length || 1) * (ann.size * 0.6));
       const h = ann.size * 1.2;
       return { minX: ann.x, maxX: ann.x + w, minY: ann.y, maxY: ann.y + h };
@@ -216,55 +200,12 @@ const App = () => {
     return -1;
   };
 
-  const getPdfCoordinates = (e) => {
-    const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-
-    const canvasX = (e.clientX - rect.left) * scaleX;
-    const canvasY = (e.clientY - rect.top) * scaleY;
-
-    return { x: canvasX / scale, y: canvasY / scale };
-  };
-
-  // IMPORTANT: don’t start pan on UI clicks
-  const isInteractiveTarget = (target) => {
-    if (!target || typeof target.closest !== "function") return false;
-    return !!target.closest(
-      "button, input, textarea, select, option, a, label, [role='button']"
-    );
-  };
-
-  const startPanFromEvent = (e) => {
-    const el = scrollContainerRef.current;
-    if (!el) return;
-
-    isPanning.current = true;
-    setIsPanningState(true);
-    document.body.style.cursor = "grabbing";
-
-    startPan.current = {
-      x: e.clientX,
-      y: e.clientY,
-      sl: el.scrollLeft,
-      st: el.scrollTop,
-    };
-  };
-
-  const stopPan = () => {
-    if (!isPanning.current) return;
-    isPanning.current = false;
-    setIsPanningState(false);
-    document.body.style.cursor = "default";
-  };
-
-  // ---------- Load libs ----------
+  // Load Libraries
   useEffect(() => {
     const loadLibs = async () => {
       try {
         if (!window.pdfjsLib) {
-          const script1 = document.createElement("script");
+          const script1 = document.createElement('script');
           script1.src = PDFJS_URL;
           script1.onload = () => {
             window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
@@ -276,7 +217,7 @@ const App = () => {
         }
 
         if (!window.jspdf) {
-          const script2 = document.createElement("script");
+          const script2 = document.createElement('script');
           script2.src = JSPDF_URL;
           script2.onload = () => setJspdfLib(window.jspdf);
           document.head.appendChild(script2);
@@ -290,7 +231,7 @@ const App = () => {
     loadLibs();
   }, []);
 
-  // ---------- Upload ----------
+  // Handle File Upload
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file || !pdfLib) return;
@@ -308,28 +249,30 @@ const App = () => {
         setTextInput(null);
         setSelectedIndex(-1);
       } catch (error) {
-        console.error("Error loading PDF:", error);
-        alert("Error parsing PDF. Please try another file.");
+        console.error('Error loading PDF:', error);
+        alert('Error parsing PDF. Please try another file.');
       }
     };
     reader.readAsArrayBuffer(file);
   };
 
-  // ---------- Render ----------
+  // Render Page
   useEffect(() => {
     if (!pdfDoc) return;
     renderPage(pageNum);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pdfDoc, pageNum, scale, pdfLib]);
 
+  // Redraw annotations
   useEffect(() => {
     drawAnnotations();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [annotations, pageNum, scale, currentPath, startPoint, isFilled, isDrawing, selectedIndex]);
+  }, [annotations, pageNum, scale, currentPath, startPoint, isFilled, isDrawing, selectedIndex, fontSize]);
 
+  // Force focus on text input when it opens
   useEffect(() => {
     if (textInput && textInputRef.current) {
-      setTimeout(() => textInputRef.current?.focus(), 10);
+      setTimeout(() => {
+        textInputRef.current?.focus();
+      }, 10);
     }
   }, [textInput]);
 
@@ -343,43 +286,18 @@ const App = () => {
       const delta = -e.deltaY;
 
       if (e.ctrlKey) {
-        setScale((s) => Math.min(5, Math.max(0.5, s + delta * 0.002)));
+        setScale(s => Math.min(5, Math.max(0.5, s + (delta * 0.002))));
       } else {
         const zoomStep = 0.1;
-        setScale((prevScale) => {
+        setScale(prevScale => {
           const newScale = delta > 0 ? prevScale + zoomStep : prevScale - zoomStep;
           return Math.min(4, Math.max(0.25, newScale));
         });
       }
     };
 
-    container.addEventListener("wheel", handleWheel, { passive: false });
-    return () => container.removeEventListener("wheel", handleWheel);
-  }, []);
-
-  // Global panning listeners (reliable right-click pan)
-  useEffect(() => {
-    const handleGlobalPointerMove = (e) => {
-      if (!isPanning.current || !scrollContainerRef.current) return;
-      e.preventDefault();
-
-      const dx = e.clientX - startPan.current.x;
-      const dy = e.clientY - startPan.current.y;
-
-      scrollContainerRef.current.scrollLeft = startPan.current.sl - dx;
-      scrollContainerRef.current.scrollTop = startPan.current.st - dy;
-    };
-
-    window.addEventListener("pointermove", handleGlobalPointerMove, { passive: false });
-    window.addEventListener("pointerup", stopPan);
-    window.addEventListener("pointercancel", stopPan);
-
-    return () => {
-      window.removeEventListener("pointermove", handleGlobalPointerMove);
-      window.removeEventListener("pointerup", stopPan);
-      window.removeEventListener("pointercancel", stopPan);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    container.addEventListener('wheel', handleWheel, { passive: false });
+    return () => container.removeEventListener('wheel', handleWheel);
   }, []);
 
   const renderPage = async (num) => {
@@ -389,9 +307,7 @@ const App = () => {
     const requestId = renderRequestRef.current;
 
     if (renderTaskRef.current) {
-      try {
-        await renderTaskRef.current.cancel();
-      } catch (_) {}
+      try { await renderTaskRef.current.cancel(); } catch (_) {}
     }
 
     try {
@@ -410,8 +326,8 @@ const App = () => {
         drawCanvas.width = viewport.width;
 
         const renderContext = {
-          canvasContext: pdfCanvas.getContext("2d"),
-          viewport,
+          canvasContext: pdfCanvas.getContext('2d'),
+          viewport: viewport
         };
 
         const renderTask = page.render(renderContext);
@@ -425,41 +341,101 @@ const App = () => {
         }
       }
     } catch (error) {
-      if (error?.name === "RenderingCancelledException") return;
-      console.error("Error rendering page:", error);
+      if (error?.name === 'RenderingCancelledException') return;
+      console.error('Error rendering page:', error);
     }
   };
 
-  // ---------- Pan start (FIXED) ----------
+  // --- Pan Logic (Pointer Capture) ---
   const handleContainerPointerDown = (e) => {
-    // If you click any UI element inside the container (like "Choose PDF"), DON'T PAN.
+    // ✅ FIX: don't ever pan when clicking UI elements (prevents Upload/Choose PDF from breaking)
     if (isInteractiveTarget(e.target)) return;
 
-    // No PDF loaded? also don't pan (so the middle upload works)
+    // ✅ FIX: if no PDF loaded, don't pan at all (so the middle upload panel is clickable)
     if (!pdfDoc) return;
 
-    const isCanvasTarget =
-      e.target === canvasRef.current || e.target === pdfCanvasRef.current;
+    // ✅ FIX: Mac ctrl+click should count as right click
+    const isRightClick = (e.button === 2) || (e.button === 0 && e.ctrlKey);
 
     const isPanButton =
-      e.button === 2 || // right
-      e.button === 1 || // middle
-      (e.button === 0 && activeTool === "cursor" && isCanvasTarget); // left only on canvas
+      isRightClick ||                // right (or ctrl+click)
+      e.button === 1 ||               // middle
+      (e.button === 0 && activeTool === 'cursor'); // left when cursor
 
     if (!isPanButton) return;
 
     e.preventDefault();
-    startPanFromEvent(e);
+
+    const el = scrollContainerRef.current;
+    if (!el) return;
+
+    // Capture pointer so pan continues even if you move outside
+    try {
+      el.setPointerCapture(e.pointerId);
+    } catch (err) {
+      // ignore
+    }
+
+    isPanning.current = true;
+    setIsPanningState(true);
+    document.body.style.cursor = 'grabbing';
+
+    startPan.current = {
+      x: e.clientX,
+      y: e.clientY,
+      sl: el.scrollLeft,
+      st: el.scrollTop
+    };
   };
 
-  // ---------- AI polish ----------
+  const handleContainerPointerMove = (e) => {
+    if (!isPanning.current) return;
+
+    e.preventDefault();
+    const el = scrollContainerRef.current;
+    if (!el) return;
+
+    const dx = e.clientX - startPan.current.x;
+    const dy = e.clientY - startPan.current.y;
+
+    el.scrollLeft = startPan.current.sl - dx;
+    el.scrollTop = startPan.current.st - dy;
+  };
+
+  const handleContainerPointerUp = (e) => {
+    if (isPanning.current) {
+      const el = scrollContainerRef.current;
+      if (el) {
+        try { el.releasePointerCapture(e.pointerId); } catch (err) {}
+      }
+
+      isPanning.current = false;
+      setIsPanningState(false);
+      document.body.style.cursor = 'default';
+    }
+  };
+
+  // --- Coordinates ---
+  const getPdfCoordinates = (e) => {
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+
+    const canvasX = (e.clientX - rect.left) * scaleX;
+    const canvasY = (e.clientY - rect.top) * scaleY;
+
+    return { x: canvasX / scale, y: canvasY / scale };
+  };
+
   const handlePolishText = async () => {
     if (!textInput || !textInput.text.trim()) return;
     setIsPolishing(true);
+
     try {
       const prompt = `Rewrite the following text to be more professional, grammatically correct, and concise: "${textInput.text}". Return ONLY the rewritten text, no explanations.`;
       const polishedText = await callGemini(prompt, "You are a professional editor.");
-      setTextInput((prev) => ({ ...prev, text: polishedText.trim() }));
+      setTextInput(prev => ({ ...prev, text: polishedText.trim() }));
     } catch (error) {
       console.error("Polishing failed", error);
     } finally {
@@ -467,40 +443,42 @@ const App = () => {
     }
   };
 
-  // ---------- Text finalize ----------
+  // --- Text finalize ---
   const finalizeText = (shouldClose = true) => {
     if (!textInput) return;
-    const t = (textInput.text || "").trim();
 
+    const t = (textInput.text || '').trim();
     if (t) {
       const newAnn = {
-        type: "text",
+        type: 'text',
         x: textInput.x,
         y: textInput.y,
         text: textInput.text,
         color,
-        size: fontSize,
+        size: fontSize
       };
 
-      setAnnotations((prev) => ({
+      setAnnotations(prev => ({
         ...prev,
-        [pageNum]: [...(prev[pageNum] || []), newAnn],
+        [pageNum]: [...(prev[pageNum] || []), newAnn]
       }));
     }
 
-    if (shouldClose) setTextInput(null);
+    if (shouldClose) {
+      setTextInput(null);
+    }
   };
 
   const handleInputBlur = () => finalizeText(true);
 
   const handleTextSubmit = (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       finalizeText(true);
     }
   };
 
-  // ---------- Arrow drawing helper ----------
+  // --- Arrow drawing helper ---
   const strokeArrow = (ctx, x1, y1, x2, y2, headLenPx) => {
     ctx.beginPath();
     ctx.moveTo(x1, y1);
@@ -524,26 +502,21 @@ const App = () => {
     ctx.stroke();
   };
 
-  // ---------- Canvas interactions ----------
+  // --- Canvas interactions: cursor move/select + drawing ---
   const handleCanvasPointerDown = (e) => {
-    // Right/middle click pan should always work from canvas
-    if (e.button === 2 || e.button === 1) {
+    if (e.button === 2 || (e.button === 0 && e.ctrlKey)) {
       e.preventDefault();
-      e.stopPropagation();
-      startPanFromEvent(e);
-      return;
+      // let container pan handle it
     }
 
-    // left click only for drawing/editing
     if (e.button !== 0) return;
 
-    if (activeTool === "cursor") {
+    if (activeTool === 'cursor') {
       const pt = getPdfCoordinates(e);
       const idx = hitTestPage(pt);
       setSelectedIndex(idx);
 
       if (idx !== -1) {
-        // dragging object, stop pan
         e.preventDefault();
         e.stopPropagation();
 
@@ -554,32 +527,31 @@ const App = () => {
         const pageAnns = annotations[pageNum] || [];
         dragAnnRef.current.original = deepCopyAnn(pageAnns[idx]);
 
-        try {
-          canvasRef.current?.setPointerCapture(e.pointerId);
-        } catch {}
+        try { canvasRef.current?.setPointerCapture(e.pointerId); } catch {}
       }
       return;
     }
 
     const coords = getPdfCoordinates(e);
 
-    if (activeTool === "text") {
+    if (activeTool === 'text') {
       e.preventDefault();
-      if (textInput) finalizeText(false);
-      setTextInput({ x: coords.x, y: coords.y, text: "" });
+
+      if (textInput) {
+        finalizeText(false);
+      }
+      setTextInput({ x: coords.x, y: coords.y, text: '' });
       return;
     }
 
     setIsDrawing(true);
     setStartPoint(coords);
 
-    if (activeTool === "pen" || activeTool === "eraser") {
+    if (activeTool === 'pen' || activeTool === 'eraser') {
       setCurrentPath([coords]);
     }
 
-    try {
-      canvasRef.current?.setPointerCapture(e.pointerId);
-    } catch {}
+    try { canvasRef.current?.setPointerCapture(e.pointerId); } catch {}
   };
 
   const handleCanvasPointerMove = (e) => {
@@ -594,7 +566,7 @@ const App = () => {
 
       const moved = translateAnn(original, dx, dy);
 
-      setAnnotations((prev) => {
+      setAnnotations(prev => {
         const pageAnns = [...(prev[pageNum] || [])];
         if (index < 0 || index >= pageAnns.length) return prev;
         pageAnns[index] = moved;
@@ -607,9 +579,9 @@ const App = () => {
 
     const coords = getPdfCoordinates(e);
 
-    if (activeTool === "pen" || activeTool === "eraser") {
-      setCurrentPath((prev) => [...prev, coords]);
-    } else if (["line", "arrow", "rect", "circle"].includes(activeTool)) {
+    if (activeTool === 'pen' || activeTool === 'eraser') {
+      setCurrentPath(prev => [...prev, coords]);
+    } else if (['line', 'arrow', 'rect', 'circle'].includes(activeTool)) {
       canvasRef.current.tempEnd = coords;
       drawAnnotations();
     }
@@ -622,16 +594,12 @@ const App = () => {
       dragAnnRef.current.active = false;
       dragAnnRef.current.index = -1;
       dragAnnRef.current.original = null;
-      try {
-        canvasRef.current?.releasePointerCapture(e.pointerId);
-      } catch {}
+      try { canvasRef.current?.releasePointerCapture(e.pointerId); } catch {}
       return;
     }
 
     if (!isDrawing) {
-      try {
-        canvasRef.current?.releasePointerCapture(e.pointerId);
-      } catch {}
+      try { canvasRef.current?.releasePointerCapture(e.pointerId); } catch {}
       return;
     }
 
@@ -639,29 +607,27 @@ const App = () => {
 
     let newAnn = null;
     const baseProps = {
-      color: activeTool === "eraser" ? "#ffffff" : color,
-      width: activeTool === "eraser" ? 20 : lineWidth,
+      color: activeTool === 'eraser' ? '#ffffff' : color,
+      width: activeTool === 'eraser' ? 20 : lineWidth,
     };
 
-    if (activeTool === "pen" || activeTool === "eraser") {
+    if (activeTool === 'pen' || activeTool === 'eraser') {
       newAnn = { ...baseProps, type: activeTool, points: currentPath };
-    } else if (activeTool === "line") {
-      newAnn = { ...baseProps, type: "line", start: startPoint, end: coords };
-    } else if (activeTool === "arrow") {
-      newAnn = { ...baseProps, type: "arrow", start: startPoint, end: coords };
-    } else if (activeTool === "rect") {
-      newAnn = { ...baseProps, type: "rect", start: startPoint, end: coords, filled: isFilled };
-    } else if (activeTool === "circle") {
-      const radius = Math.sqrt(
-        Math.pow(coords.x - startPoint.x, 2) + Math.pow(coords.y - startPoint.y, 2)
-      );
-      newAnn = { ...baseProps, type: "circle", center: startPoint, radius, filled: isFilled };
+    } else if (activeTool === 'line') {
+      newAnn = { ...baseProps, type: 'line', start: startPoint, end: coords };
+    } else if (activeTool === 'arrow') {
+      newAnn = { ...baseProps, type: 'arrow', start: startPoint, end: coords };
+    } else if (activeTool === 'rect') {
+      newAnn = { ...baseProps, type: 'rect', start: startPoint, end: coords, filled: isFilled };
+    } else if (activeTool === 'circle') {
+      const radius = Math.sqrt(Math.pow(coords.x - startPoint.x, 2) + Math.pow(coords.y - startPoint.y, 2));
+      newAnn = { ...baseProps, type: 'circle', center: startPoint, radius, filled: isFilled };
     }
 
     if (newAnn) {
-      setAnnotations((prev) => ({
+      setAnnotations(prev => ({
         ...prev,
-        [pageNum]: [...(prev[pageNum] || []), newAnn],
+        [pageNum]: [...(prev[pageNum] || []), newAnn]
       }));
       setSelectedIndex(-1);
     }
@@ -671,50 +637,48 @@ const App = () => {
     setStartPoint(null);
     if (canvasRef.current) canvasRef.current.tempEnd = null;
 
-    try {
-      canvasRef.current?.releasePointerCapture(e.pointerId);
-    } catch {}
+    try { canvasRef.current?.releasePointerCapture(e.pointerId); } catch {}
   };
 
-  // ---------- Draw ----------
+  // --- Draw all annotations ---
   const drawAnnotations = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     const drawItem = (ann, idx) => {
       ctx.save();
 
-      if (ann.type === "eraser") ctx.globalCompositeOperation = "destination-out";
-      else ctx.globalCompositeOperation = "source-over";
+      if (ann.type === 'eraser') ctx.globalCompositeOperation = 'destination-out';
+      else ctx.globalCompositeOperation = 'source-over';
 
       ctx.strokeStyle = ann.color;
       ctx.lineWidth = ann.width * scale;
       ctx.fillStyle = ann.color;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
 
-      if (ann.type === "pen" || ann.type === "eraser") {
+      if (ann.type === 'pen' || ann.type === 'eraser') {
         ctx.beginPath();
         if (ann.points.length > 0) {
           ctx.moveTo(ann.points[0].x * scale, ann.points[0].y * scale);
-          ann.points.forEach((p) => ctx.lineTo(p.x * scale, p.y * scale));
+          ann.points.forEach(p => ctx.lineTo(p.x * scale, p.y * scale));
         }
         ctx.stroke();
-      } else if (ann.type === "line") {
+      } else if (ann.type === 'line') {
         ctx.beginPath();
         ctx.moveTo(ann.start.x * scale, ann.start.y * scale);
         ctx.lineTo(ann.end.x * scale, ann.end.y * scale);
         ctx.stroke();
-      } else if (ann.type === "arrow") {
+      } else if (ann.type === 'arrow') {
         const x1 = ann.start.x * scale;
         const y1 = ann.start.y * scale;
         const x2 = ann.end.x * scale;
         const y2 = ann.end.y * scale;
         const head = Math.max(10, ann.width * 3) * scale;
         strokeArrow(ctx, x1, y1, x2, y2, head);
-      } else if (ann.type === "rect") {
+      } else if (ann.type === 'rect') {
         const x = ann.start.x * scale;
         const y = ann.start.y * scale;
         const w = (ann.end.x - ann.start.x) * scale;
@@ -723,24 +687,23 @@ const App = () => {
         ctx.rect(x, y, w, h);
         if (ann.filled) ctx.fill();
         ctx.stroke();
-      } else if (ann.type === "circle") {
+      } else if (ann.type === 'circle') {
         ctx.beginPath();
         ctx.arc(ann.center.x * scale, ann.center.y * scale, ann.radius * scale, 0, 2 * Math.PI);
         if (ann.filled) ctx.fill();
         ctx.stroke();
-      } else if (ann.type === "text") {
+      } else if (ann.type === 'text') {
         ctx.font = `${ann.size * scale}px sans-serif`;
-        ctx.textBaseline = "top";
+        ctx.textBaseline = 'top';
         ctx.fillText(ann.text, ann.x * scale, ann.y * scale);
       }
 
-      // selection highlight
-      if (idx === selectedIndex && activeTool === "cursor") {
+      if (idx === selectedIndex && activeTool === 'cursor') {
         const bb = annBBoxPdf(ann);
         const pad = 6;
-        ctx.globalCompositeOperation = "source-over";
+        ctx.globalCompositeOperation = 'source-over';
         ctx.lineWidth = 1;
-        ctx.strokeStyle = "rgba(37,99,235,0.9)";
+        ctx.strokeStyle = 'rgba(37,99,235,0.9)';
         ctx.setLineDash([6, 4]);
         ctx.strokeRect(
           bb.minX * scale - pad,
@@ -757,39 +720,40 @@ const App = () => {
     const pageAnns = annotations[pageNum] || [];
     pageAnns.forEach((ann, idx) => drawItem(ann, idx));
 
-    // preview
     if (isDrawing) {
       const tempEnd = canvas.tempEnd;
-      if (activeTool === "pen" || activeTool === "eraser") {
-        drawItem(
-          {
-            type: activeTool,
-            points: currentPath,
-            color: activeTool === "eraser" ? "#ffffff" : color,
-            width: activeTool === "eraser" ? 20 : lineWidth,
-          },
-          -999
-        );
+      if (activeTool === 'pen' || activeTool === 'eraser') {
+        drawItem({
+          type: activeTool,
+          points: currentPath,
+          color: activeTool === 'eraser' ? '#ffffff' : color,
+          width: activeTool === 'eraser' ? 20 : lineWidth
+        }, -999);
       } else if (startPoint && tempEnd) {
-        if (activeTool === "line") {
-          drawItem({ type: "line", start: startPoint, end: tempEnd, color, width: lineWidth }, -999);
-        } else if (activeTool === "arrow") {
-          drawItem({ type: "arrow", start: startPoint, end: tempEnd, color, width: lineWidth }, -999);
-        } else if (activeTool === "rect") {
-          drawItem({ type: "rect", start: startPoint, end: tempEnd, color, width: lineWidth, filled: isFilled }, -999);
-        } else if (activeTool === "circle") {
-          const r = Math.sqrt(Math.pow(tempEnd.x - startPoint.x, 2) + Math.pow(tempEnd.y - startPoint.y, 2));
-          drawItem({ type: "circle", center: startPoint, radius: r, color, width: lineWidth, filled: isFilled }, -999);
+        if (activeTool === 'line') {
+          drawItem({ type: 'line', start: startPoint, end: tempEnd, color, width: lineWidth }, -999);
+        } else if (activeTool === 'arrow') {
+          drawItem({ type: 'arrow', start: startPoint, end: tempEnd, color, width: lineWidth }, -999);
+        } else if (activeTool === 'rect') {
+          drawItem({ type: 'rect', start: startPoint, end: tempEnd, color, width: lineWidth, filled: isFilled }, -999);
+        } else if (activeTool === 'circle') {
+          drawItem({
+            type: 'circle',
+            center: startPoint,
+            radius: Math.sqrt(Math.pow(tempEnd.x - startPoint.x, 2) + Math.pow(tempEnd.y - startPoint.y, 2)),
+            color,
+            width: lineWidth,
+            filled: isFilled
+          }, -999);
         }
       }
     }
   };
 
-  // ---------- Actions ----------
   const undoLast = () => {
     const pageAnns = annotations[pageNum] || [];
     if (pageAnns.length === 0) return;
-    setAnnotations((prev) => ({ ...prev, [pageNum]: pageAnns.slice(0, -1) }));
+    setAnnotations(prev => ({ ...prev, [pageNum]: pageAnns.slice(0, -1) }));
     setSelectedIndex(-1);
   };
 
@@ -798,10 +762,10 @@ const App = () => {
     const { jsPDF } = jspdfLib;
 
     const doc = new jsPDF({
-      orientation: "p",
-      unit: "pt",
-      format: "a4",
-      putOnlyUsedFonts: true,
+      orientation: 'p',
+      unit: 'pt',
+      format: 'a4',
+      putOnlyUsedFonts: true
     });
 
     doc.deletePage(1);
@@ -837,329 +801,13 @@ const App = () => {
 
       doc.addPage(
         [originalViewport.width, originalViewport.height],
-        originalViewport.width > originalViewport.height ? "l" : "p"
+        originalViewport.width > originalViewport.height ? 'l' : 'p'
       );
 
       const viewport = page.getViewport({ scale: exportScale });
-      const canvas = document.createElement("canvas");
+      const canvas = document.createElement('canvas');
       canvas.width = viewport.width;
       canvas.height = viewport.height;
-      const ctx = canvas.getContext("2d");
+      const ctx = canvas.getContext('2d');
 
-      await page.render({ canvasContext: ctx, viewport }).promise;
-
-      const pageAnns = annotations[i] || [];
-      pageAnns.forEach((ann) => {
-        ctx.save();
-        if (ann.type === "eraser") ctx.globalCompositeOperation = "destination-out";
-        else ctx.globalCompositeOperation = "source-over";
-
-        ctx.strokeStyle = ann.color;
-        ctx.lineWidth = ann.width * exportScale;
-        ctx.fillStyle = ann.color;
-        ctx.lineCap = "round";
-        ctx.lineJoin = "round";
-
-        const s = exportScale;
-
-        if (ann.type === "pen" || ann.type === "eraser") {
-          ctx.beginPath();
-          if (ann.points.length > 0) {
-            ctx.moveTo(ann.points[0].x * s, ann.points[0].y * s);
-            ann.points.forEach((p) => ctx.lineTo(p.x * s, p.y * s));
-          }
-          ctx.stroke();
-        } else if (ann.type === "line") {
-          ctx.beginPath();
-          ctx.moveTo(ann.start.x * s, ann.start.y * s);
-          ctx.lineTo(ann.end.x * s, ann.end.y * s);
-          ctx.stroke();
-        } else if (ann.type === "arrow") {
-          const x1 = ann.start.x * s;
-          const y1 = ann.start.y * s;
-          const x2 = ann.end.x * s;
-          const y2 = ann.end.y * s;
-          const head = Math.max(10, ann.width * 3) * s;
-          strokeArrowExport(ctx, x1, y1, x2, y2, head);
-        } else if (ann.type === "rect") {
-          const rx = ann.start.x * s;
-          const ry = ann.start.y * s;
-          const rw = (ann.end.x - ann.start.x) * s;
-          const rh = (ann.end.y - ann.start.y) * s;
-          ctx.beginPath();
-          ctx.rect(rx, ry, rw, rh);
-          if (ann.filled) ctx.fill();
-          ctx.stroke();
-        } else if (ann.type === "circle") {
-          ctx.beginPath();
-          ctx.arc(ann.center.x * s, ann.center.y * s, ann.radius * s, 0, 2 * Math.PI);
-          if (ann.filled) ctx.fill();
-          ctx.stroke();
-        } else if (ann.type === "text") {
-          ctx.font = `${ann.size * s}px sans-serif`;
-          ctx.textBaseline = "top";
-          ctx.fillText(ann.text, ann.x * s, ann.y * s);
-        }
-
-        ctx.restore();
-      });
-
-      const imgData = canvas.toDataURL("image/jpeg", 0.95);
-      doc.addImage(imgData, "JPEG", 0, 0, originalViewport.width, originalViewport.height);
-    }
-
-    doc.save(`edited_${fileName}`);
-  };
-
-  return (
-    <div className="flex flex-col h-screen bg-gray-100 font-sans text-gray-800">
-      {/* Toolbar */}
-      <div className="bg-white border-b shadow-sm px-4 py-3 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3 min-w-0">
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            className="h-9 px-4 rounded-lg border bg-white hover:bg-gray-50 text-gray-700 flex items-center gap-2 text-sm font-medium shadow-sm"
-          >
-            <Upload size={16} />
-            Upload
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".pdf"
-            className="hidden"
-            onChange={handleFileUpload}
-          />
-
-          <div className="flex items-center gap-1 rounded-xl border bg-white p-1 shadow-sm">
-            <ToolButton active={activeTool === "cursor"} onClick={() => setActiveTool("cursor")} icon={<MousePointer size={18} />} label="Select / Move / Pan" />
-            <ToolButton active={activeTool === "pen"} onClick={() => setActiveTool("pen")} icon={<Pen size={18} />} label="Pen" />
-            <ToolButton active={activeTool === "eraser"} onClick={() => setActiveTool("eraser")} icon={<Eraser size={18} />} label="Eraser" />
-            <div className="w-px h-6 bg-gray-200 mx-1" />
-            <ToolButton active={activeTool === "line"} onClick={() => setActiveTool("line")} icon={<Minus size={18} />} label="Line" />
-            <ToolButton active={activeTool === "arrow"} onClick={() => setActiveTool("arrow")} icon={<ArrowRight size={18} />} label="Arrow" />
-            <ToolButton active={activeTool === "rect"} onClick={() => setActiveTool("rect")} icon={<Square size={18} />} label="Rectangle" />
-            <ToolButton active={activeTool === "circle"} onClick={() => setActiveTool("circle")} icon={<Circle size={18} />} label="Circle" />
-            <ToolButton active={activeTool === "text"} onClick={() => setActiveTool("text")} icon={<Type size={18} />} label="Text" />
-          </div>
-
-          <div className="flex items-center gap-3 rounded-xl border bg-white px-3 py-1 shadow-sm">
-            <label className="h-7 w-7 rounded-md border shadow-sm overflow-hidden cursor-pointer">
-              <input
-                type="color"
-                value={color}
-                onChange={(e) => setColor(e.target.value)}
-                className="h-10 w-10 -m-1 cursor-pointer"
-                title="Color"
-              />
-            </label>
-
-            {activeTool === "text" ? (
-              <div className="flex items-center gap-2">
-                <input
-                  type="range"
-                  min="8"
-                  max="72"
-                  value={fontSize}
-                  onChange={(e) => setFontSize(parseInt(e.target.value))}
-                  className="w-36 accent-blue-600"
-                  title="Font size"
-                />
-                <span className="text-xs text-gray-500 w-10 text-right">{fontSize}px</span>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <input
-                  type="range"
-                  min="1"
-                  max="10"
-                  value={lineWidth}
-                  onChange={(e) => setLineWidth(parseInt(e.target.value))}
-                  className="w-36 accent-blue-600"
-                  title="Thickness"
-                />
-                <span className="text-xs text-gray-500 w-10 text-right">{lineWidth}px</span>
-              </div>
-            )}
-
-            <button
-              type="button"
-              onClick={() => setIsFilled(!isFilled)}
-              className={[
-                "h-9 w-9 rounded-md grid place-items-center transition",
-                isFilled ? "bg-blue-600 text-white" : "text-gray-500 hover:bg-gray-100",
-              ].join(" ")}
-              title="Fill shapes"
-            >
-              <PaintBucket size={18} />
-            </button>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={undoLast}
-            className="h-9 w-9 rounded-md grid place-items-center text-gray-600 hover:bg-gray-100"
-            title="Undo"
-          >
-            <RotateCcw size={18} />
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setAnnotations((prev) => ({ ...prev, [pageNum]: [] }));
-              setSelectedIndex(-1);
-            }}
-            className="h-9 w-9 rounded-md grid place-items-center text-red-500 hover:bg-red-50"
-            title="Clear Page"
-          >
-            <Trash2 size={18} />
-          </button>
-
-          <button
-            type="button"
-            onClick={exportPDF}
-            disabled={!pdfDoc}
-            className={[
-              "h-9 px-4 rounded-lg font-medium flex items-center gap-2 shadow-sm",
-              pdfDoc ? "bg-blue-600 text-white hover:bg-blue-700" : "bg-gray-200 text-gray-400 cursor-not-allowed",
-            ].join(" ")}
-          >
-            <Save size={18} />
-            Save PDF
-          </button>
-        </div>
-      </div>
-
-      {/* Main Workspace */}
-      <div
-        ref={scrollContainerRef}
-        className="flex-1 overflow-auto bg-gray-200 relative"
-        style={{ userSelect: "none", touchAction: "none" }}
-        onPointerDown={handleContainerPointerDown}
-        onContextMenu={(e) => e.preventDefault()}
-      >
-        {!pdfDoc ? (
-          <div className="flex flex-col items-center justify-center text-gray-400 h-full p-8">
-            <div className="bg-white p-8 rounded-2xl shadow-sm text-center max-w-md">
-              <Upload size={48} className="mx-auto mb-4 text-blue-500 opacity-50" />
-              <h3 className="text-xl font-semibold text-gray-700 mb-2">Upload a Document</h3>
-              <p className="mb-6">Select a PDF file to start annotating.</p>
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition"
-              >
-                Choose PDF
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="p-8 w-max h-max">
-            <div
-              className="relative shadow-xl origin-top-left"
-              style={{
-                width: "fit-content",
-                height: "fit-content",
-                cursor: isPanningState ? "grabbing" : activeTool === "cursor" ? "grab" : "crosshair",
-              }}
-            >
-              <canvas ref={pdfCanvasRef} className="bg-white block" onContextMenu={(e) => e.preventDefault()} />
-
-              <canvas
-                ref={canvasRef}
-                className="absolute top-0 left-0"
-                style={{ touchAction: "none" }}
-                onPointerDown={handleCanvasPointerDown}
-                onPointerMove={handleCanvasPointerMove}
-                onPointerUp={handleCanvasPointerUp}
-                onPointerCancel={handleCanvasPointerUp}
-                onPointerLeave={handleCanvasPointerUp}
-                onContextMenu={(e) => e.preventDefault()}
-              />
-
-              {textInput && (
-                <div
-                  className="absolute z-50 flex items-center gap-2"
-                  style={{ left: textInput.x * scale, top: textInput.y * scale - 8 }}
-                >
-                  <input
-                    ref={textInputRef}
-                    value={textInput.text}
-                    onChange={(e) => setTextInput({ ...textInput, text: e.target.value })}
-                    onBlur={handleInputBlur}
-                    onKeyDown={handleTextSubmit}
-                    className="bg-white border border-blue-500 rounded px-2 py-1 outline-none shadow-lg min-w-[220px]"
-                    style={{
-                      fontSize: `${fontSize * scale}px`,
-                      fontFamily: "sans-serif",
-                      color,
-                      lineHeight: 1.2,
-                    }}
-                    placeholder="Type… (Enter to save)"
-                    onPointerDown={(e) => e.stopPropagation()}
-                  />
-
-                  <button
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      handlePolishText();
-                    }}
-                    disabled={isPolishing || !textInput.text}
-                    className="bg-indigo-600 text-white p-1.5 rounded-full shadow-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
-                    title="Rewrite with AI"
-                  >
-                    {isPolishing ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Footer */}
-      {pdfDoc && (
-        <div className="bg-white border-t px-4 py-2 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <button onClick={() => setScale((s) => Math.max(0.25, s - 0.25))} className="h-9 w-9 rounded-md grid place-items-center hover:bg-gray-100">
-              <ZoomOut size={16} />
-            </button>
-            <span className="text-xs font-mono w-14 text-center text-gray-600">{Math.round(scale * 100)}%</span>
-            <button onClick={() => setScale((s) => Math.min(4, s + 0.25))} className="h-9 w-9 rounded-md grid place-items-center hover:bg-gray-100">
-              <ZoomIn size={16} />
-            </button>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setPageNum((p) => Math.max(1, p - 1))}
-              disabled={pageNum <= 1}
-              className="h-9 w-9 rounded-md grid place-items-center hover:bg-gray-100 disabled:opacity-30"
-            >
-              <ChevronLeft size={18} />
-            </button>
-            <span className="text-sm text-gray-700">
-              Page {pageNum} of {pdfDoc.numPages}
-            </span>
-            <button
-              onClick={() => setPageNum((p) => Math.min(pdfDoc.numPages, p + 1))}
-              disabled={pageNum >= pdfDoc.numPages}
-              className="h-9 w-9 rounded-md grid place-items-center hover:bg-gray-100 disabled:opacity-30"
-            >
-              <ChevronRight size={18} />
-            </button>
-          </div>
-
-          <div className="text-xs text-gray-400 max-w-[220px] truncate">{fileName}</div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-export default App;
+      aw
