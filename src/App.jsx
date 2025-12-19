@@ -109,17 +109,24 @@ const App = () => {
   useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
-    const handleWheel = (e) => {
-      e.preventDefault();
-      if (e.ctrlKey) {
-        const delta = -e.deltaY;
-        setScale(s => Math.min(5, Math.max(0.5, s + (delta * 0.002)))));
-      } else {
-        const delta = -e.deltaY;
-        const step = 0.1;
-        setScale(prev => Math.min(4, Math.max(0.25, prev + (delta > 0 ? step : -step)))));
-      }
-    };
+   const handleWheel = (e) => {
+  // Prevent default scrolling behavior completely
+  e.preventDefault();
+
+  if (e.ctrlKey) {
+    // pinch/trackpad zoom
+    const delta = -e.deltaY;
+    setScale((s) => Math.min(5, Math.max(0.5, s + delta * 0.002)));
+  } else {
+    // step zoom with wheel
+    const delta = -e.deltaY;
+    const zoomStep = 0.1;
+    setScale((prev) => {
+      const next = delta > 0 ? prev + zoomStep : prev - zoomStep;
+      return Math.min(4, Math.max(0.25, next));
+    });
+  }
+};
     container.addEventListener('wheel', handleWheel, { passive: false });
     return () => container.removeEventListener('wheel', handleWheel);
   }, []);
