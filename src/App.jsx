@@ -33,6 +33,11 @@ const App = () => {
   const [startPoint, setStartPoint] = useState(null);
   const [textInput, setTextInput] = useState(null);
 
+  // Selection & moving
+  const [selected, setSelected] = useState({ page: null, index: -1 });
+  const [dragging, setDragging] = useState(false);
+  const dragStartRef = useRef(null);
+
   const canvasRef = useRef(null);
   const pdfCanvasRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -92,6 +97,7 @@ const App = () => {
         setPdfDoc(pdf);
         setPageNum(1);
         setAnnotations({});
+        setSelected({ page: null, index: -1 });
       } catch (error) {
         console.error('Error loading PDF:', error);
         alert('Error parsing PDF. Please try another file.');
@@ -102,8 +108,7 @@ const App = () => {
 
   // Render Page
   useEffect(() => { if (pdfDoc) renderPage(pageNum); }, [pdfDoc, pageNum, scale, pdfLib]);
-
-  useEffect(() => { drawAnnotations(); }, [annotations, pageNum, scale, currentPath, startPoint, isFilled]);
+  useEffect(() => { drawAnnotations(); }, [annotations, pageNum, scale, currentPath, startPoint, isFilled, selected, dragging]);
 
   // Custom wheel zoom
   useEffect(() => {
@@ -169,6 +174,30 @@ const App = () => {
     }
   };
 
+  // --- Geometry helpers (for hit-testing & moving) ---
+  const pointDistanceToSegment = (px, py, x1, y1, x2, y2) => {
+    const A = px - x1, B = py - y1, C = x2 - x1, D = y2 - y1;
+    const dot = A * C + B * D;
+    const lenSq = C * C + D * D;
+    let t = lenSq ? dot / lenSq : -1;
+    t = Math.max(0, Math.min(1, t));
+    const nx = x1 + t * C, ny = y1 + t * D;
+    const dx = px - nx, dy = py - ny;
+    return Math.hypot(dx, dy);
+  };
+  const insideRect = (x, y, r) => {
+    const minX = Math.min(r.start.x, r.end.x);
+    const maxX = Math.max(r.start.x, r.end.x);
+    const minY = Math.min(r.start.y, r.end.y);
+    const maxY = Math.max(r.start.y, r.end.y);
+    return x >= minX && x <= maxX && y >= minY && y <= maxY;
+  };
+  const bboxOfPen = (pts) => {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    pts.forEach(p => { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); });
+    return { minX, minY, maxX, maxY };
+  };
+
   // --- Pan Logic ---
   const handleContainerMouseDown = (e) => {
     if (e.button === 2 || e.button === 1) {
@@ -190,7 +219,7 @@ const App = () => {
   const handleContainerMouseUp = () => { isPanning.current = false; };
   const handleContextMenu = (e) => e.preventDefault();
 
-  // --- Drawing Logic ---
+  // --- Drawing OR Selecting/Moving ---
   const getPdfCoordinates = (e) => {
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
@@ -201,26 +230,123 @@ const App = () => {
     return { x: canvasX / scale, y: canvasY / scale };
   };
 
+  const hitTestAt = (p) => {
+    const pageAnns = annotations[pageNum] || [];
+    const padding = 6 / scale; // pixels -> pdf pts
+    for (let i = pageAnns.length - 1; i >= 0; i--) {
+      const ann = pageAnns[i];
+      if (ann.type === 'rect') {
+        if (ann.filled) {
+          if (insideRect(p.x, p.y, ann)) return i;
+        } else {
+          // treat border as wide band
+          const nearEdge =
+            Math.abs(p.x - ann.start.x) <= padding || Math.abs(p.x - ann.end.x) <= padding ||
+            Math.abs(p.y - ann.start.y) <= padding || Math.abs(p.y - ann.end.y) <= padding;
+          if (insideRect(p.x, p.y, ann) && nearEdge) return i;
+        }
+      } else if (ann.type === 'circle') {
+        const d = Math.hypot(p.x - ann.center.x, p.y - ann.center.y);
+        if (ann.filled) {
+          if (d <= ann.radius + padding) return i;
+        } else {
+          if (Math.abs(d - ann.radius) <= padding) return i;
+        }
+      } else if (ann.type === 'line') {
+        const d = pointDistanceToSegment(p.x, p.y, ann.start.x, ann.start.y, ann.end.x, ann.end.y);
+        if (d <= padding) return i;
+      } else if (ann.type === 'pen' || ann.type === 'eraser') {
+        if (ann.points.length > 1) {
+          for (let k = 0; k < ann.points.length - 1; k++) {
+            const a = ann.points[k], b = ann.points[k + 1];
+            const d = pointDistanceToSegment(p.x, p.y, a.x, a.y, b.x, b.y);
+            if (d <= padding) return i;
+          }
+          const bb = bboxOfPen(ann.points);
+          if (p.x >= bb.minX - padding && p.x <= bb.maxX + padding &&
+              p.y >= bb.minY - padding && p.y <= bb.maxY + padding) {
+            return i;
+          }
+        }
+      } else if (ann.type === 'text') {
+        const approxW = (ann.size * 0.6) * (ann.text?.length || 1) / scale;
+        const approxH = (ann.size) / scale;
+        const inBox = p.x >= ann.x && p.x <= ann.x + approxW && p.y >= ann.y && p.y <= ann.y + approxH;
+        if (inBox) return i;
+      }
+    }
+    return -1;
+  };
+
   const startDrawing = (e) => {
     if (e.button !== 0) return;
-    if (activeTool === 'cursor') return;
-    if (isPanning.current) return;
 
-    const coords = getPdfCoordinates(e);
-
-    if (activeTool === 'text') {
-      if (!textInput) setTextInput({ x: coords.x, y: coords.y, text: '' });
+    // MOVE/SELECT mode with cursor
+    if (activeTool === 'cursor') {
+      if (isPanning.current) return;
+      const p = getPdfCoordinates(e);
+      const idx = hitTestAt(p);
+      if (idx !== -1) {
+        setSelected({ page: pageNum, index: idx });
+        setDragging(true);
+        dragStartRef.current = { p0: p };
+      } else {
+        setSelected({ page: null, index: -1 });
+      }
       return;
     }
 
+    // Drawing modes
+    if (activeTool === 'text') {
+      if (!textInput) setTextInput({ x: getPdfCoordinates(e).x, y: getPdfCoordinates(e).y, text: '' });
+      return;
+    }
+
+    const coords = getPdfCoordinates(e);
     setIsDrawing(true);
     setStartPoint(coords);
     if (activeTool === 'pen' || activeTool === 'eraser') setCurrentPath([coords]);
   };
 
   const draw = (e) => {
-    if (!isDrawing) return;
     const coords = getPdfCoordinates(e);
+
+    // Dragging selected
+    if (dragging && selected.page === pageNum && selected.index > -1) {
+      const { p0 } = dragStartRef.current || { p0: coords };
+      const dx = coords.x - p0.x;
+      const dy = coords.y - p0.y;
+      dragStartRef.current = { p0: coords };
+
+      setAnnotations(prev => {
+        const copy = { ...prev };
+        const arr = [...(copy[pageNum] || [])];
+        const ann = { ...arr[selected.index] };
+
+        if (ann.type === 'line') {
+          ann.start = { x: ann.start.x + dx, y: ann.start.y + dy };
+          ann.end = { x: ann.end.x + dx, y: ann.end.y + dy };
+        } else if (ann.type === 'rect') {
+          ann.start = { x: ann.start.x + dx, y: ann.start.y + dy };
+          ann.end   = { x: ann.end.x + dx, y: ann.end.y + dy };
+        } else if (ann.type === 'circle') {
+          ann.center = { x: ann.center.x + dx, y: ann.center.y + dy };
+        } else if (ann.type === 'pen' || ann.type === 'eraser') {
+          ann.points = ann.points.map(pt => ({ x: pt.x + dx, y: pt.y + dy }));
+        } else if (ann.type === 'text') {
+          ann.x += dx; ann.y += dy;
+        }
+
+        arr[selected.index] = ann;
+        copy[pageNum] = arr;
+        return copy;
+      });
+
+      return; // don't draw new content while dragging
+    }
+
+    // Draw new content
+    if (!isDrawing) return;
     if (activeTool === 'pen' || activeTool === 'eraser') {
       setCurrentPath(prev => [...prev, coords]);
     } else if (['line', 'rect', 'circle'].includes(activeTool)) {
@@ -230,6 +356,13 @@ const App = () => {
   };
 
   const stopDrawing = () => {
+    // End move
+    if (dragging) {
+      setDragging(false);
+      dragStartRef.current = null;
+      return;
+    }
+
     if (!isDrawing) return;
     const tempEnd = canvasRef.current?.tempEnd || null;
 
@@ -279,7 +412,7 @@ const App = () => {
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    const drawItem = (ann) => {
+    const drawItem = (ann, i) => {
       ctx.save();
       ctx.globalCompositeOperation = ann.type === 'eraser' ? 'destination-out' : 'source-over';
       ctx.strokeStyle = ann.color;
@@ -320,20 +453,54 @@ const App = () => {
         ctx.fillText(ann.text, ann.x * scale, ann.y * scale);
       }
       ctx.restore();
+
+      // selection highlight
+      if (selected.page === pageNum && selected.index === i) {
+        ctx.save();
+        ctx.setLineDash([4, 4]);
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(0,0,255,0.6)';
+
+        if (ann.type === 'rect') {
+          const x = ann.start.x * scale;
+          const y = ann.start.y * scale;
+          const w = (ann.end.x - ann.start.x) * scale;
+          const h = (ann.end.y - ann.start.y) * scale;
+          ctx.strokeRect(x - 3, y - 3, w + 6, h + 6);
+        } else if (ann.type === 'circle') {
+          ctx.beginPath();
+          ctx.arc(ann.center.x * scale, ann.center.y * scale, Math.max(8, ann.radius * scale + 6), 0, 2 * Math.PI);
+          ctx.stroke();
+        } else if (ann.type === 'line') {
+          ctx.beginPath();
+          ctx.moveTo(ann.start.x * scale, ann.start.y * scale);
+          ctx.lineTo(ann.end.x * scale, ann.end.y * scale);
+          ctx.stroke();
+        } else if (ann.type === 'pen' || ann.type === 'eraser') {
+          const bb = bboxOfPen(ann.points);
+          ctx.strokeRect(bb.minX * scale - 3, bb.minY * scale - 3, (bb.maxX - bb.minX) * scale + 6, (bb.maxY - bb.minY) * scale + 6);
+        } else if (ann.type === 'text') {
+          const approxW = (ann.size * 0.6) * (ann.text?.length || 1);
+          const approxH = ann.size;
+          ctx.strokeRect(ann.x * scale - 3, ann.y * scale - 3, approxW + 6, approxH + 6);
+        }
+        ctx.restore();
+      }
     };
 
-    (annotations[pageNum] || []).forEach(drawItem);
+    (annotations[pageNum] || []).forEach((ann, i) => drawItem(ann, i));
 
     if (isDrawing) {
       const tempEnd = canvas.tempEnd;
+      const preview = (ann) => drawItem(ann, -1);
       if (activeTool === 'pen' || activeTool === 'eraser') {
-        drawItem({ type: activeTool, points: currentPath, color: activeTool === 'eraser' ? '#ffffff' : color, width: activeTool === 'eraser' ? 20 : lineWidth });
+        preview({ type: activeTool, points: currentPath, color: activeTool === 'eraser' ? '#ffffff' : color, width: activeTool === 'eraser' ? 20 : lineWidth });
       } else if (startPoint && tempEnd) {
-        if (activeTool === 'line') drawItem({ type: 'line', start: startPoint, end: tempEnd, color, width: lineWidth });
-        if (activeTool === 'rect') drawItem({ type: 'rect', start: startPoint, end: tempEnd, color, width: lineWidth, filled: isFilled });
+        if (activeTool === 'line') preview({ type: 'line', start: startPoint, end: tempEnd, color, width: lineWidth });
+        if (activeTool === 'rect') preview({ type: 'rect', start: startPoint, end: tempEnd, color, width: lineWidth, filled: isFilled });
         if (activeTool === 'circle') {
           const r = Math.hypot(tempEnd.x - startPoint.x, tempEnd.y - startPoint.y);
-          drawItem({ type: 'circle', center: startPoint, radius: r, color, width: lineWidth, filled: isFilled });
+          preview({ type: 'circle', center: startPoint, radius: r, color, width: lineWidth, filled: isFilled });
         }
       }
     }
@@ -343,9 +510,10 @@ const App = () => {
     const pageAnns = annotations[pageNum] || [];
     if (pageAnns.length === 0) return;
     setAnnotations({ ...annotations, [pageNum]: pageAnns.slice(0, -1) });
+    setSelected({ page: null, index: -1 });
   };
 
-  // --- SMART FILL TOGGLE (updates last rect/circle immediately) ---
+  // Smart Fill toggle (also updates last rect/circle immediately)
   const toggleFill = () => {
     setIsFilled(prev => {
       const next = !prev;
@@ -458,7 +626,7 @@ const App = () => {
 
           {/* Tools */}
           <div className="flex items-center gap-1 bg-gray-50 p-1 rounded-lg border overflow-x-auto max-w-[50vw] sm:max-w-none no-scrollbar">
-            <ToolButton active={activeTool === 'cursor'} onClick={() => setActiveTool('cursor')} icon={<MousePointer size={18} />} label="Select / Navigation" />
+            <ToolButton active={activeTool === 'cursor'} onClick={() => setActiveTool('cursor')} icon={<MousePointer size={18} />} label="Select / Move" />
             <ToolButton active={activeTool === 'pen'} onClick={() => setActiveTool('pen')} icon={<Pen size={18} />} label="Pen" />
             <ToolButton active={activeTool === 'eraser'} onClick={() => setActiveTool('eraser')} icon={<Eraser size={18} />} label="Eraser" />
             <div className="w-px h-6 bg-gray-200 mx-1" />
@@ -502,7 +670,7 @@ const App = () => {
 
         <div className="flex items-center gap-2">
           <button onClick={undoLast} className="icon-btn" title="Undo last action"><RotateCcw size={18} /></button>
-          <button onClick={() => setAnnotations({ ...annotations, [pageNum]: [] })} className="icon-btn text-red-500 hover:bg-red-50" title="Clear Page"><Trash2 size={18} /></button>
+          <button onClick={() => { setAnnotations({ ...annotations, [pageNum]: [] }); setSelected({ page: null, index: -1 }); }} className="icon-btn text-red-500 hover:bg-red-50" title="Clear Page"><Trash2 size={18} /></button>
           <div className="h-6 w-px bg-gray-300 mx-2" />
           <button onClick={exportPDF} disabled={!pdfDoc} className="btn-primary disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed">
             <span className="inline-flex items-center gap-2"><Save size={18} /><span className="hidden sm:inline">Save PDF</span></span>
@@ -532,7 +700,7 @@ const App = () => {
         ) : (
           <div
             className="relative shadow-xl origin-top-left"
-            style={{ width: 'fit-content', height: 'fit-content', cursor: isPanning.current ? 'grabbing' : activeTool === 'cursor' ? 'default' : 'crosshair' }}
+            style={{ width: 'fit-content', height: 'fit-content', cursor: isPanning.current ? 'grabbing' : activeTool === 'cursor' ? (dragging ? 'grabbing' : 'grab') : 'crosshair' }}
           >
             <canvas ref={pdfCanvasRef} className="bg-white block" />
             <canvas
