@@ -109,24 +109,23 @@ const App = () => {
   useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
-   const handleWheel = (e) => {
-  // Prevent default scrolling behavior completely
-  e.preventDefault();
 
-  if (e.ctrlKey) {
-    // pinch/trackpad zoom
-    const delta = -e.deltaY;
-    setScale((s) => Math.min(5, Math.max(0.5, s + delta * 0.002)));
-  } else {
-    // step zoom with wheel
-    const delta = -e.deltaY;
-    const zoomStep = 0.1;
-    setScale((prev) => {
-      const next = delta > 0 ? prev + zoomStep : prev - zoomStep;
-      return Math.min(4, Math.max(0.25, next));
-    });
-  }
-};
+    const handleWheel = (e) => {
+      e.preventDefault();
+
+      if (e.ctrlKey) {
+        const delta = -e.deltaY;
+        setScale((s) => Math.min(5, Math.max(0.5, s + delta * 0.002)));
+      } else {
+        const delta = -e.deltaY;
+        const zoomStep = 0.1;
+        setScale((prev) => {
+          const next = delta > 0 ? prev + zoomStep : prev - zoomStep;
+          return Math.min(4, Math.max(0.25, next));
+        });
+      }
+    };
+
     container.addEventListener('wheel', handleWheel, { passive: false });
     return () => container.removeEventListener('wheel', handleWheel);
   }, []);
@@ -346,6 +345,30 @@ const App = () => {
     setAnnotations({ ...annotations, [pageNum]: pageAnns.slice(0, -1) });
   };
 
+  // --- SMART FILL TOGGLE (updates last rect/circle immediately) ---
+  const toggleFill = () => {
+    setIsFilled(prev => {
+      const next = !prev;
+
+      setAnnotations(prevAnns => {
+        const pageAnns = prevAnns[pageNum] || [];
+        if (pageAnns.length === 0) return prevAnns;
+
+        const lastIndex = pageAnns.length - 1;
+        const last = pageAnns[lastIndex];
+
+        if (last?.type === 'rect' || last?.type === 'circle') {
+          const updated = [...pageAnns];
+          updated[lastIndex] = { ...last, filled: next };
+          return { ...prevAnns, [pageNum]: updated };
+        }
+        return prevAnns;
+      });
+
+      return next;
+    });
+  };
+
   const exportPDF = async () => {
     if (!pdfDoc || !jspdfLib) return;
     const { jsPDF } = jspdfLib;
@@ -452,17 +475,25 @@ const App = () => {
             <div className="flex items-center gap-3">
               <input type="color" value={color} onChange={(e) => setColor(e.target.value)} className="w-8 h-8 rounded cursor-pointer border-0 p-0 shadow-sm" title="Color" />
 
-              {/* Fill Toggle */}
-              <button onClick={() => setIsFilled(!isFilled)}
-                className={`icon-btn ${isFilled ? 'icon-btn-active' : ''}`} title="Fill Shapes (Paint Bucket)">
+              {/* Fill Toggle (smart) */}
+              <button
+                onClick={toggleFill}
+                className={`icon-btn ${isFilled ? 'icon-btn-active' : ''}`}
+                title="Fill Shapes (Paint Bucket)"
+              >
                 <PaintBucket size={18} />
               </button>
 
               {/* Thickness */}
               <div className="flex flex-col w-28">
-                <input type="range" min="1" max="10" value={lineWidth}
-                      onChange={(e) => setLineWidth(parseInt(e.target.value))}
-                      className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer" />
+                <input
+                  type="range"
+                  min="1"
+                  max="10"
+                  value={lineWidth}
+                  onChange={(e) => setLineWidth(parseInt(e.target.value))}
+                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                />
                 <span className="text-[10px] text-gray-500 text-center">{lineWidth}px</span>
               </div>
             </div>
@@ -499,18 +530,32 @@ const App = () => {
             </div>
           </div>
         ) : (
-          <div className="relative shadow-xl origin-top-left" style={{ width: 'fit-content', height: 'fit-content', cursor: isPanning.current ? 'grabbing' : activeTool === 'cursor' ? 'default' : 'crosshair' }}>
+          <div
+            className="relative shadow-xl origin-top-left"
+            style={{ width: 'fit-content', height: 'fit-content', cursor: isPanning.current ? 'grabbing' : activeTool === 'cursor' ? 'default' : 'crosshair' }}
+          >
             <canvas ref={pdfCanvasRef} className="bg-white block" />
-            <canvas ref={canvasRef} className="absolute top-0 left-0" onMouseDown={startDrawing} onMouseMove={draw} onMouseUp={stopDrawing} onMouseLeave={stopDrawing} />
+            <canvas
+              ref={canvasRef}
+              className="absolute top-0 left-0"
+              onMouseDown={startDrawing}
+              onMouseMove={draw}
+              onMouseUp={stopDrawing}
+              onMouseLeave={stopDrawing}
+            />
             {textInput && (
               <div className="absolute z-50" style={{ left: textInput.x * scale, top: (textInput.y * scale) - 4 }}>
                 <input
-                  autoFocus value={textInput.text}
+                  autoFocus
+                  value={textInput.text}
                   onChange={(e) => setTextInput({ ...textInput, text: e.target.value })}
-                  onBlur={finalizeText} onKeyDown={handleTextSubmit}
+                  onBlur={finalizeText}
+                  onKeyDown={handleTextSubmit}
                   className="bg-transparent border border-blue-500 rounded px-1 py-0 outline-none text-blue-900 placeholder-blue-300 shadow-sm bg-white/50"
                   style={{ font: `${16 * scale}px sans-serif`, color, minWidth: '100px', lineHeight: 1 }}
-                  placeholder="Type..." onMouseDown={(e) => e.stopPropagation()} />
+                  placeholder="Type..."
+                  onMouseDown={(e) => e.stopPropagation()}
+                />
               </div>
             )}
           </div>
