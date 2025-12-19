@@ -29,7 +29,7 @@ const JSPDF_URL = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.
 
 // --- Gemini API Helper ---
 const callGemini = async (prompt, systemInstruction = "") => {
-  const apiKey = ""; // Injected at runtime
+  const apiKey = "AIzaSyAvMz690LneR8w8V3IZysJUQD6C_aoTWEM"; // Injected at runtime
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
 
   const payload = {
