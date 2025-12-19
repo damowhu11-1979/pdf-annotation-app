@@ -810,4 +810,309 @@ const App = () => {
       canvas.height = viewport.height;
       const ctx = canvas.getContext('2d');
 
-      aw
+      await page.render({ canvasContext: ctx, viewport }).promise;
+
+      const pageAnns = annotations[i] || [];
+      pageAnns.forEach(ann => {
+        ctx.save();
+        if (ann.type === 'eraser') ctx.globalCompositeOperation = 'destination-out';
+        else ctx.globalCompositeOperation = 'source-over';
+
+        ctx.strokeStyle = ann.color;
+        ctx.lineWidth = ann.width * exportScale;
+        ctx.fillStyle = ann.color;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        const s = exportScale;
+
+        if (ann.type === 'pen' || ann.type === 'eraser') {
+          ctx.beginPath();
+          if (ann.points.length > 0) {
+            ctx.moveTo(ann.points[0].x * s, ann.points[0].y * s);
+            ann.points.forEach(p => ctx.lineTo(p.x * s, p.y * s));
+          }
+          ctx.stroke();
+        } else if (ann.type === 'line') {
+          ctx.beginPath();
+          ctx.moveTo(ann.start.x * s, ann.start.y * s);
+          ctx.lineTo(ann.end.x * s, ann.end.y * s);
+          ctx.stroke();
+        } else if (ann.type === 'arrow') {
+          const x1 = ann.start.x * s;
+          const y1 = ann.start.y * s;
+          const x2 = ann.end.x * s;
+          const y2 = ann.end.y * s;
+          const head = Math.max(10, ann.width * 3) * s;
+          strokeArrowExport(ctx, x1, y1, x2, y2, head);
+        } else if (ann.type === 'rect') {
+          const rx = ann.start.x * s;
+          const ry = ann.start.y * s;
+          const rw = (ann.end.x - ann.start.x) * s;
+          const rh = (ann.end.y - ann.start.y) * s;
+          ctx.beginPath();
+          ctx.rect(rx, ry, rw, rh);
+          if (ann.filled) ctx.fill();
+          ctx.stroke();
+        } else if (ann.type === 'circle') {
+          ctx.beginPath();
+          ctx.arc(ann.center.x * s, ann.center.y * s, ann.radius * s, 0, 2 * Math.PI);
+          if (ann.filled) ctx.fill();
+          ctx.stroke();
+        } else if (ann.type === 'text') {
+          ctx.font = `${ann.size * s}px sans-serif`;
+          ctx.textBaseline = 'top';
+          ctx.fillText(ann.text, ann.x * s, ann.y * s);
+        }
+
+        ctx.restore();
+      });
+
+      const imgData = canvas.toDataURL('image/jpeg', 0.95);
+      doc.addImage(imgData, 'JPEG', 0, 0, originalViewport.width, originalViewport.height);
+    }
+
+    doc.save(`edited_${fileName}`);
+  };
+
+  return (
+    <div className="flex flex-col h-screen bg-gray-100 font-sans text-gray-800">
+      {/* Header / Toolbar */}
+      <div className="bg-white border-b shadow-sm p-4 flex flex-wrap items-center justify-between gap-4 z-10">
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 bg-gray-50 p-1 rounded-lg border">
+            <button
+              onClick={() => fileInputRef.current.click()}
+              className="p-2 hover:bg-gray-200 rounded text-gray-700 flex items-center gap-2 text-sm font-medium"
+            >
+              <Upload size={18} />
+              <span className="hidden sm:inline">Upload</span>
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf"
+              className="hidden"
+              onChange={handleFileUpload}
+            />
+          </div>
+
+          <div className="h-6 w-px bg-gray-300 mx-2"></div>
+
+          {/* Tool Buttons */}
+          <div className="flex items-center gap-1 bg-gray-50 p-1 rounded-lg border overflow-x-auto max-w-[50vw] sm:max-w-none no-scrollbar">
+            <ToolButton active={activeTool === 'cursor'} onClick={() => setActiveTool('cursor')} icon={<MousePointer size={18} />} label="Select / Move • Pan" />
+            <ToolButton active={activeTool === 'pen'} onClick={() => setActiveTool('pen')} icon={<Pen size={18} />} label="Pen" />
+            <ToolButton active={activeTool === 'eraser'} onClick={() => setActiveTool('eraser')} icon={<Eraser size={18} />} label="Eraser" />
+            <div className="w-px h-6 bg-gray-200 mx-1"></div>
+            <ToolButton active={activeTool === 'line'} onClick={() => setActiveTool('line')} icon={<Minus size={18} />} label="Line" />
+            <ToolButton active={activeTool === 'arrow'} onClick={() => setActiveTool('arrow')} icon={<ArrowRight size={18} />} label="Arrow" />
+            <ToolButton active={activeTool === 'rect'} onClick={() => setActiveTool('rect')} icon={<Square size={18} />} label="Rectangle" />
+            <ToolButton active={activeTool === 'circle'} onClick={() => setActiveTool('circle')} icon={<Circle size={18} />} label="Circle" />
+            <ToolButton active={activeTool === 'text'} onClick={() => setActiveTool('text')} icon={<Type size={18} />} label="Text" />
+          </div>
+
+          <div className="h-6 w-px bg-gray-300 mx-2"></div>
+
+          {/* Style Controls */}
+          {activeTool !== 'eraser' && (
+            <div className="flex items-center gap-3">
+              <div className="flex flex-col items-center">
+                <input
+                  type="color"
+                  value={color}
+                  onChange={(e) => setColor(e.target.value)}
+                  className="w-8 h-8 rounded cursor-pointer border-0 p-0 shadow-sm"
+                  title="Color"
+                />
+              </div>
+
+              <button
+                onClick={() => setIsFilled(!isFilled)}
+                className={`p-2 rounded flex items-center justify-center transition-all ${isFilled
+                  ? 'bg-blue-600 text-white shadow-md'
+                  : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
+                  }`}
+                title="Fill Shapes (Paint Bucket)"
+              >
+                <PaintBucket size={18} />
+              </button>
+
+              <div className="flex flex-col w-24">
+                {activeTool === 'text' ? (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] text-gray-500">Size</span>
+                      <span className="text-[10px] text-gray-500">{fontSize}px</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="8"
+                      max="72"
+                      value={fontSize}
+                      onChange={(e) => setFontSize(parseInt(e.target.value))}
+                      className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                      title="Font Size"
+                    />
+                  </>
+                ) : (
+                  <>
+                    <input
+                      type="range"
+                      min="1"
+                      max="10"
+                      value={lineWidth}
+                      onChange={(e) => setLineWidth(parseInt(e.target.value))}
+                      className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                      title="Thickness"
+                    />
+                    <span className="text-[10px] text-gray-500 text-center">{lineWidth}px</span>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button onClick={undoLast} className="p-2 hover:bg-gray-100 rounded text-gray-600" title="Undo last action">
+            <RotateCcw size={18} />
+          </button>
+
+          <button
+            onClick={() => { setAnnotations(prev => ({ ...prev, [pageNum]: [] })); setSelectedIndex(-1); }}
+            className="p-2 hover:bg-red-50 text-red-500 rounded"
+            title="Clear Page"
+          >
+            <Trash2 size={18} />
+          </button>
+
+          <div className="h-6 w-px bg-gray-300 mx-2"></div>
+
+          <button
+            onClick={exportPDF}
+            disabled={!pdfDoc}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${!pdfDoc
+              ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+              : 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm'
+              }`}
+          >
+            <Save size={18} />
+            <span className="hidden sm:inline">Save PDF</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Main Workspace */}
+      <div
+        ref={scrollContainerRef}
+        className="flex-1 overflow-auto bg-gray-200 relative cursor-default"
+        style={{ userSelect: 'none', touchAction: 'none' }}
+        onPointerDown={handleContainerPointerDown}
+        onPointerMove={handleContainerPointerMove}
+        onPointerUp={handleContainerPointerUp}
+        onPointerCancel={handleContainerPointerUp}
+        // ✅ FIX: removed pointerLeave; it can prematurely stop pointer capture in some sandboxes
+        onContextMenu={(e) => e.preventDefault()}
+      >
+        {!pdfDoc ? (
+          <div className="flex flex-col items-center justify-center text-gray-400 h-full p-8">
+            <div className="bg-white p-8 rounded-2xl shadow-sm text-center max-w-md">
+              <Upload size={48} className="mx-auto mb-4 text-blue-500 opacity-50" />
+              <h3 className="text-xl font-semibold text-gray-700 mb-2">Upload a Document</h3>
+              <p className="mb-6">Select a PDF file to start annotating.</p>
+
+              <button
+                // ✅ FIX: stop propagation so container pan never steals this press
+                onPointerDown={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={() => fileInputRef.current.click()}
+                className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition"
+              >
+                Choose PDF
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="p-8 w-max h-max">
+            <div
+              className="relative shadow-xl origin-top-left"
+              style={{
+                width: 'fit-content',
+                height: 'fit-content',
+                cursor: isPanningState ? 'grabbing' : activeTool === 'cursor' ? 'grab' : 'crosshair'
+              }}
+            >
+              <canvas ref={pdfCanvasRef} className="bg-white block" onContextMenu={(e) => e.preventDefault()} />
+
+              <canvas
+                ref={canvasRef}
+                className="absolute top-0 left-0"
+                onPointerDown={handleCanvasPointerDown}
+                onPointerMove={handleCanvasPointerMove}
+                onPointerUp={handleCanvasPointerUp}
+                onPointerCancel={handleCanvasPointerUp}
+                onPointerLeave={handleCanvasPointerUp}
+                onContextMenu={(e) => e.preventDefault()}
+              />
+
+              {textInput && (
+                <div
+                  className="absolute z-50 flex items-center gap-2"
+                  style={{ left: textInput.x * scale, top: (textInput.y * scale) - 8 }}
+                >
+                  <input
+                    ref={textInputRef}
+                    autoFocus
+                    value={textInput.text}
+                    onChange={(e) => setTextInput({ ...textInput, text: e.target.value })}
+                    onBlur={handleInputBlur}
+                    onKeyDown={handleTextSubmit}
+                    className="bg-white border border-blue-500 rounded px-2 py-1 outline-none text-blue-900 placeholder-blue-300 shadow-lg min-w-[200px]"
+                    style={{
+                      fontSize: `${fontSize * scale}px`,
+                      fontFamily: 'sans-serif',
+                      color: color,
+                      lineHeight: 1.2
+                    }}
+                    placeholder="Type..."
+                    onPointerDown={(e) => e.stopPropagation()}
+                  />
+
+                  <button
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handlePolishText();
+                    }}
+                    disabled={isPolishing || !textInput.text}
+                    className="bg-indigo-600 text-white p-1.5 rounded-full shadow-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                    title="Rewrite with AI"
+                  >
+                    {isPolishing ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// Helper Component for Tools
+const ToolButton = ({ active, onClick, icon, label }) => (
+  <button
+    onClick={onClick}
+    className={`p-2 rounded flex items-center justify-center transition-all ${active
+      ? 'bg-blue-100 text-blue-700 shadow-inner'
+      : 'hover:bg-gray-200 text-gray-600'
+      }`}
+    title={label}
+  >
+    {icon}
+  </button>
+);
+
+export default App;
