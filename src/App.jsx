@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import {
   Upload,
   Pen,
@@ -15,16 +15,13 @@ import {
   PaintBucket,
   Sparkles,
   Loader2,
+  ChevronLeft,
+  ChevronRight,
   ZoomIn,
   ZoomOut,
-  Cloud,
-  Undo2,
-  Share2,
-  Code2,
-  Eye,
 } from "lucide-react";
 
-// External libraries
+// External libraries via CDN
 const PDFJS_URL =
   "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
 const PDFJS_WORKER_URL =
@@ -32,11 +29,9 @@ const PDFJS_WORKER_URL =
 const JSPDF_URL =
   "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
 
-// --- Gemini API Helper (optional, used only for text polish button) ---
+// --- Gemini API Helper (optional) ---
 const callGemini = async (prompt, systemInstruction = "") => {
-  const apiKey = ""; // optional
-  if (!apiKey) throw new Error("No Gemini API key configured.");
-
+  const apiKey = ""; // Injected at runtime
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
 
   const payload = {
@@ -75,14 +70,16 @@ const callGemini = async (prompt, systemInstruction = "") => {
 const App = () => {
   const [pdfLib, setPdfLib] = useState(null);
   const [jspdfLib, setJspdfLib] = useState(null);
+
   const [pdfDoc, setPdfDoc] = useState(null);
   const [pageNum, setPageNum] = useState(1);
-  const [scale, setScale] = useState(1.5);
+  const [totalPages, setTotalPages] = useState(0);
+  const [scale, setScale] = useState(1.2); // Good default starting scale
   const [fileName, setFileName] = useState("document.pdf");
 
   // Tools: 'cursor', 'pen', 'line', 'arrow', 'rect', 'circle', 'text', 'eraser'
   const [activeTool, setActiveTool] = useState("cursor");
-  const [color, setColor] = useState("#2563EB"); // blue-ish like screenshot
+  const [color, setColor] = useState("#EF4444");
   const [lineWidth, setLineWidth] = useState(3);
   const [fontSize, setFontSize] = useState(16);
   const [isFilled, setIsFilled] = useState(false);
@@ -110,21 +107,34 @@ const App = () => {
   const renderTaskRef = useRef(null);
   const renderRequestRef = useRef(0);
 
+  // Queue for file upload if libraries aren't ready
+  const pendingFileRef = useRef(null);
+  const [pdfEngineReady, setPdfEngineReady] = useState(false);
+
   // Panning
   const isPanning = useRef(false);
   const [isPanningState, setIsPanningState] = useState(false);
   const startPan = useRef({ x: 0, y: 0, sl: 0, st: 0 });
+  const panPointerIdRef = useRef(null);
 
-  // Spacebar pan (reliable across browsers)
+  // Spacebar pan
   const spaceDownRef = useRef(false);
   useEffect(() => {
     const down = (e) => {
-      if (e.code === "Space") spaceDownRef.current = true;
+      if (e.code === "Space") {
+        if (document.activeElement === document.body) e.preventDefault();
+        spaceDownRef.current = true;
+        // If we are in cursor mode or just holding space, update cursor
+        document.body.style.cursor = "grab";
+      }
     };
     const up = (e) => {
-      if (e.code === "Space") spaceDownRef.current = false;
+      if (e.code === "Space") {
+        spaceDownRef.current = false;
+        document.body.style.cursor = "default";
+      }
     };
-    window.addEventListener("keydown", down);
+    window.addEventListener("keydown", down, { passive: false });
     window.addEventListener("keyup", up);
     return () => {
       window.removeEventListener("keydown", down);
@@ -136,8 +146,8 @@ const App = () => {
   const dragAnnRef = useRef({
     active: false,
     index: -1,
-    start: { x: 0, y: 0 }, // PDF coords
-    original: null, // deep copy
+    start: { x: 0, y: 0 },
+    original: null,
   });
 
   const [selectedIndex, setSelectedIndex] = useState(-1);
@@ -209,7 +219,7 @@ const App = () => {
 
   const hitTestPage = (ptPdf) => {
     const pageAnns = annotations[pageNum] || [];
-    const tol = 10 / scale; // 10px tolerance in PDF units
+    const tol = 10 / scale;
     for (let i = pageAnns.length - 1; i >= 0; i--) {
       const bb = annBBoxPdf(pageAnns[i]);
       if (
@@ -234,17 +244,24 @@ const App = () => {
           s1.onload = () => {
             window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
             setPdfLib(window.pdfjsLib);
+            setPdfEngineReady(true);
+          };
+          s1.onerror = () => {
+            console.error("Failed to load pdf.js");
+            setPdfEngineReady(false);
           };
           document.head.appendChild(s1);
         } else {
           window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
           setPdfLib(window.pdfjsLib);
+          setPdfEngineReady(true);
         }
 
         if (!window.jspdf) {
           const s2 = document.createElement("script");
           s2.src = JSPDF_URL;
           s2.onload = () => setJspdfLib(window.jspdf);
+          s2.onerror = () => console.error("Failed to load jspdf");
           document.head.appendChild(s2);
         } else {
           setJspdfLib(window.jspdf);
@@ -256,45 +273,64 @@ const App = () => {
     loadLibs();
   }, []);
 
-  // Handle File Upload
-  const handleFileUpload = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file || !pdfLib) return;
+  // Process pending file if it was uploaded before PDF engine was ready
+  useEffect(() => {
+    if (pdfLib && pendingFileRef.current) {
+      const f = pendingFileRef.current;
+      pendingFileRef.current = null;
+      processFile(f);
+    }
+  }, [pdfLib]);
 
-    setFileName(file.name);
-    const reader = new FileReader();
-    reader.onload = async function (ev) {
-      const typedarray = new Uint8Array(ev.target.result);
+  const processFile = useCallback(
+    async (file) => {
+      if (!file || !pdfLib) return;
+
+      setFileName(file.name);
       try {
+        const arrayBuffer = await file.arrayBuffer();
+        const typedarray = new Uint8Array(arrayBuffer);
+
         const loadingTask = pdfLib.getDocument(typedarray);
         const pdf = await loadingTask.promise;
+
         setPdfDoc(pdf);
+        setTotalPages(pdf.numPages);
         setPageNum(1);
         setAnnotations({});
         setTextInput(null);
         setSelectedIndex(-1);
-
-        // Reset input so selecting same file again triggers change
-        if (fileInputRef.current) fileInputRef.current.value = "";
       } catch (error) {
         console.error("Error loading PDF:", error);
         alert("Error parsing PDF. Please try another file.");
       }
-    };
-    reader.readAsArrayBuffer(file);
+    },
+    [pdfLib]
+  );
+
+  const handleFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+
+    if (!pdfLib) {
+      pendingFileRef.current = file;
+      alert("PDF engine is initializing... the file will load momentarily.");
+      return;
+    }
+
+    await processFile(file);
   };
 
   // Render Page
   useEffect(() => {
     if (!pdfDoc) return;
     renderPage(pageNum);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pdfDoc, pageNum, scale, pdfLib]);
 
   // Redraw annotations
   useEffect(() => {
     drawAnnotations();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     annotations,
     pageNum,
@@ -305,6 +341,7 @@ const App = () => {
     isDrawing,
     selectedIndex,
     fontSize,
+    activeTool
   ]);
 
   // Focus text input
@@ -314,24 +351,22 @@ const App = () => {
     }
   }, [textInput]);
 
-  // Wheel zoom (non-passive)
+  // Handle Wheel: Ctrl+Wheel for Zoom, Normal Wheel for scrolling (native)
   useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
 
     const handleWheel = (e) => {
-      e.preventDefault();
-      const delta = -e.deltaY;
-
-      if (e.ctrlKey) {
-        setScale((s) => Math.min(5, Math.max(0.5, s + delta * 0.002)));
-      } else {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const delta = -e.deltaY;
         const zoomStep = 0.1;
         setScale((prev) => {
           const next = delta > 0 ? prev + zoomStep : prev - zoomStep;
-          return Math.min(4, Math.max(0.25, next));
+          return Math.min(5, Math.max(0.25, next));
         });
       }
+      // If no Ctrl key, let standard scrolling happen
     };
 
     container.addEventListener("wheel", handleWheel, { passive: false });
@@ -386,8 +421,48 @@ const App = () => {
     }
   };
 
-  // --- PAN: container pointer handlers ---
+  // --- PANNING LOGIC ---
+  useEffect(() => {
+    const onMove = (e) => {
+      if (!isPanning.current) return;
+      if (panPointerIdRef.current != null && e.pointerId !== panPointerIdRef.current)
+        return;
+
+      e.preventDefault();
+      const el = scrollContainerRef.current;
+      if (!el) return;
+
+      const dx = e.clientX - startPan.current.x;
+      const dy = e.clientY - startPan.current.y;
+
+      el.scrollLeft = startPan.current.sl - dx;
+      el.scrollTop = startPan.current.st - dy;
+    };
+
+    const end = (e) => {
+      if (!isPanning.current) return;
+      if (panPointerIdRef.current != null && e.pointerId !== panPointerIdRef.current)
+        return;
+
+      isPanning.current = false;
+      panPointerIdRef.current = null;
+      setIsPanningState(false);
+      document.body.style.cursor = "default";
+    };
+
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+    };
+  }, []);
+
   const handleContainerPointerDown = (e) => {
+    // Panning Allowed: Middle/Right Click OR Left Click + (Cursor Tool or Spacebar)
     const isPanButton =
       e.button === 1 ||
       e.button === 2 ||
@@ -396,15 +471,11 @@ const App = () => {
     if (!isPanButton) return;
 
     e.preventDefault();
-
     const el = scrollContainerRef.current;
     if (!el) return;
 
-    try {
-      el.setPointerCapture(e.pointerId);
-    } catch {}
-
     isPanning.current = true;
+    panPointerIdRef.current = e.pointerId;
     setIsPanningState(true);
     document.body.style.cursor = "grabbing";
 
@@ -414,35 +485,6 @@ const App = () => {
       sl: el.scrollLeft,
       st: el.scrollTop,
     };
-  };
-
-  const handleContainerPointerMove = (e) => {
-    if (!isPanning.current) return;
-    e.preventDefault();
-
-    const el = scrollContainerRef.current;
-    if (!el) return;
-
-    const dx = e.clientX - startPan.current.x;
-    const dy = e.clientY - startPan.current.y;
-
-    el.scrollLeft = startPan.current.sl - dx;
-    el.scrollTop = startPan.current.st - dy;
-  };
-
-  const handleContainerPointerUp = (e) => {
-    if (!isPanning.current) return;
-
-    const el = scrollContainerRef.current;
-    if (el) {
-      try {
-        el.releasePointerCapture(e.pointerId);
-      } catch {}
-    }
-
-    isPanning.current = false;
-    setIsPanningState(false);
-    document.body.style.cursor = "default";
   };
 
   // --- Coordinates ---
@@ -458,7 +500,7 @@ const App = () => {
     return { x: canvasX / scale, y: canvasY / scale };
   };
 
-  // --- Text polish (optional) ---
+  // --- Text Operations ---
   const handlePolishText = async () => {
     if (!textInput || !textInput.text.trim()) return;
     setIsPolishing(true);
@@ -467,13 +509,12 @@ const App = () => {
       const polishedText = await callGemini(prompt, "You are a professional editor.");
       setTextInput((prev) => ({ ...prev, text: polishedText.trim() }));
     } catch (err) {
-      console.warn("Polish unavailable:", err?.message || err);
+      console.error("Polishing failed", err);
     } finally {
       setIsPolishing(false);
     }
   };
 
-  // --- Text finalize ---
   const finalizeText = (shouldClose = true) => {
     if (!textInput) return;
     const t = (textInput.text || "").trim();
@@ -502,7 +543,7 @@ const App = () => {
     }
   };
 
-  // --- Arrow drawing helper ---
+  // --- Drawing Helpers ---
   const strokeArrow = (ctx, x1, y1, x2, y2, headLenPx) => {
     ctx.beginPath();
     ctx.moveTo(x1, y1);
@@ -526,21 +567,15 @@ const App = () => {
     ctx.stroke();
   };
 
-  // --- Canvas: pointer handlers (select/move + drawing) ---
+  // --- Canvas Pointers ---
   const handleCanvasPointerDown = (e) => {
-    if (e.button === 2) {
-      // right click pans (container), don't stop propagation
+    if (e.button === 2) { // Allow right-click pan
       e.preventDefault();
-      return;
+      return; 
     }
+    if (spaceDownRef.current) return; // Allow space-pan
+    if (e.button !== 0) return; // Only left click draws/selects
 
-    // SPACE-pan: let container do it
-    if (spaceDownRef.current) return;
-
-    // Only left button edits/draws
-    if (e.button !== 0) return;
-
-    // Cursor tool: try select/move; if none, let container pan
     if (activeTool === "cursor") {
       const pt = getPdfCoordinates(e);
       const idx = hitTestPage(pt);
@@ -553,13 +588,9 @@ const App = () => {
         dragAnnRef.current.active = true;
         dragAnnRef.current.index = idx;
         dragAnnRef.current.start = pt;
+        dragAnnRef.current.original = deepCopyAnn((annotations[pageNum] || [])[idx]);
 
-        const pageAnns = annotations[pageNum] || [];
-        dragAnnRef.current.original = deepCopyAnn(pageAnns[idx]);
-
-        try {
-          canvasRef.current?.setPointerCapture(e.pointerId);
-        } catch {}
+        try { canvasRef.current?.setPointerCapture(e.pointerId); } catch {}
       }
       return;
     }
@@ -580,23 +611,18 @@ const App = () => {
       setCurrentPath([coords]);
     }
 
-    try {
-      canvasRef.current?.setPointerCapture(e.pointerId);
-    } catch {}
+    try { canvasRef.current?.setPointerCapture(e.pointerId); } catch {}
   };
 
   const handleCanvasPointerMove = (e) => {
-    // dragging annotation
     if (dragAnnRef.current.active) {
       e.preventDefault();
       e.stopPropagation();
-
       const pt = getPdfCoordinates(e);
       const { start, index, original } = dragAnnRef.current;
       const dx = pt.x - start.x;
       const dy = pt.y - start.y;
       const moved = translateAnn(original, dx, dy);
-
       setAnnotations((prev) => {
         const pageAnns = [...(prev[pageNum] || [])];
         if (index < 0 || index >= pageAnns.length) return prev;
@@ -607,7 +633,6 @@ const App = () => {
     }
 
     if (!isDrawing) return;
-
     const coords = getPdfCoordinates(e);
 
     if (activeTool === "pen" || activeTool === "eraser") {
@@ -619,29 +644,22 @@ const App = () => {
   };
 
   const handleCanvasPointerUp = (e) => {
-    // finish moving
     if (dragAnnRef.current.active) {
       e.preventDefault();
       e.stopPropagation();
       dragAnnRef.current.active = false;
       dragAnnRef.current.index = -1;
       dragAnnRef.current.original = null;
-      try {
-        canvasRef.current?.releasePointerCapture(e.pointerId);
-      } catch {}
+      try { canvasRef.current?.releasePointerCapture(e.pointerId); } catch {}
       return;
     }
 
-    // finish drawing
     if (!isDrawing) {
-      try {
-        canvasRef.current?.releasePointerCapture(e.pointerId);
-      } catch {}
+      try { canvasRef.current?.releasePointerCapture(e.pointerId); } catch {}
       return;
     }
 
     const coords = getPdfCoordinates(e);
-
     let newAnn = null;
     const baseProps = {
       color: activeTool === "eraser" ? "#ffffff" : color,
@@ -655,24 +673,10 @@ const App = () => {
     } else if (activeTool === "arrow") {
       newAnn = { ...baseProps, type: "arrow", start: startPoint, end: coords };
     } else if (activeTool === "rect") {
-      newAnn = {
-        ...baseProps,
-        type: "rect",
-        start: startPoint,
-        end: coords,
-        filled: isFilled,
-      };
+      newAnn = { ...baseProps, type: "rect", start: startPoint, end: coords, filled: isFilled };
     } else if (activeTool === "circle") {
-      const radius = Math.sqrt(
-        Math.pow(coords.x - startPoint.x, 2) + Math.pow(coords.y - startPoint.y, 2)
-      );
-      newAnn = {
-        ...baseProps,
-        type: "circle",
-        center: startPoint,
-        radius,
-        filled: isFilled,
-      };
+      const radius = Math.sqrt(Math.pow(coords.x - startPoint.x, 2) + Math.pow(coords.y - startPoint.y, 2));
+      newAnn = { ...baseProps, type: "circle", center: startPoint, radius, filled: isFilled };
     }
 
     if (newAnn) {
@@ -687,13 +691,10 @@ const App = () => {
     setCurrentPath([]);
     setStartPoint(null);
     if (canvasRef.current) canvasRef.current.tempEnd = null;
-
-    try {
-      canvasRef.current?.releasePointerCapture(e.pointerId);
-    } catch {}
+    try { canvasRef.current?.releasePointerCapture(e.pointerId); } catch {}
   };
 
-  // --- Draw annotations ---
+  // --- Rendering Annotations ---
   const drawAnnotations = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -702,7 +703,6 @@ const App = () => {
 
     const drawItem = (ann, idx) => {
       ctx.save();
-
       if (ann.type === "eraser") ctx.globalCompositeOperation = "destination-out";
       else ctx.globalCompositeOperation = "source-over";
 
@@ -742,22 +742,17 @@ const App = () => {
         ctx.stroke();
       } else if (ann.type === "circle") {
         ctx.beginPath();
-        ctx.arc(
-          ann.center.x * scale,
-          ann.center.y * scale,
-          ann.radius * scale,
-          0,
-          2 * Math.PI
-        );
+        ctx.arc(ann.center.x * scale, ann.center.y * scale, ann.radius * scale, 0, 2 * Math.PI);
         if (ann.filled) ctx.fill();
         ctx.stroke();
       } else if (ann.type === "text") {
-        ctx.font = `${ann.size * scale}px ui-sans-serif, system-ui, sans-serif`;
+        ctx.font = `${ann.size * scale}px sans-serif`;
         ctx.textBaseline = "top";
+        ctx.fillStyle = ann.color;
         ctx.fillText(ann.text, ann.x * scale, ann.y * scale);
       }
 
-      // selection highlight
+      // Selection Highlight
       if (idx === selectedIndex && activeTool === "cursor") {
         const bb = annBBoxPdf(ann);
         const pad = 6;
@@ -773,57 +768,24 @@ const App = () => {
         );
         ctx.setLineDash([]);
       }
-
       ctx.restore();
     };
 
     const pageAnns = annotations[pageNum] || [];
     pageAnns.forEach((ann, idx) => drawItem(ann, idx));
 
-    // preview while drawing
+    // Preview
     if (isDrawing) {
       const tempEnd = canvas.tempEnd;
       if (activeTool === "pen" || activeTool === "eraser") {
-        drawItem(
-          {
-            type: activeTool,
-            points: currentPath,
-            color: activeTool === "eraser" ? "#ffffff" : color,
-            width: activeTool === "eraser" ? 20 : lineWidth,
-          },
-          -999
-        );
+        drawItem({ type: activeTool, points: currentPath, color: activeTool === "eraser" ? "#ffffff" : color, width: activeTool === "eraser" ? 20 : lineWidth }, -999);
       } else if (startPoint && tempEnd) {
-        if (activeTool === "line") {
-          drawItem(
-            { type: "line", start: startPoint, end: tempEnd, color, width: lineWidth },
-            -999
-          );
-        } else if (activeTool === "arrow") {
-          drawItem(
-            { type: "arrow", start: startPoint, end: tempEnd, color, width: lineWidth },
-            -999
-          );
-        } else if (activeTool === "rect") {
-          drawItem(
-            {
-              type: "rect",
-              start: startPoint,
-              end: tempEnd,
-              color,
-              width: lineWidth,
-              filled: isFilled,
-            },
-            -999
-          );
-        } else if (activeTool === "circle") {
-          const r = Math.sqrt(
-            Math.pow(tempEnd.x - startPoint.x, 2) + Math.pow(tempEnd.y - startPoint.y, 2)
-          );
-          drawItem(
-            { type: "circle", center: startPoint, radius: r, color, width: lineWidth, filled: isFilled },
-            -999
-          );
+        if (activeTool === "line") drawItem({ type: "line", start: startPoint, end: tempEnd, color, width: lineWidth }, -999);
+        else if (activeTool === "arrow") drawItem({ type: "arrow", start: startPoint, end: tempEnd, color, width: lineWidth }, -999);
+        else if (activeTool === "rect") drawItem({ type: "rect", start: startPoint, end: tempEnd, color, width: lineWidth, filled: isFilled }, -999);
+        else if (activeTool === "circle") {
+          const r = Math.sqrt(Math.pow(tempEnd.x - startPoint.x, 2) + Math.pow(tempEnd.y - startPoint.y, 2));
+          drawItem({ type: "circle", center: startPoint, radius: r, color, width: lineWidth, filled: isFilled }, -999);
         }
       }
     }
@@ -836,9 +798,13 @@ const App = () => {
     setSelectedIndex(-1);
   };
 
-  const clearPage = () => {
-    setAnnotations((prev) => ({ ...prev, [pageNum]: [] }));
-    setSelectedIndex(-1);
+  const changePage = (delta) => {
+    const next = pageNum + delta;
+    if (next >= 1 && next <= totalPages) {
+      setPageNum(next);
+      setSelectedIndex(-1);
+      setTextInput(null);
+    }
   };
 
   const exportPDF = async () => {
@@ -853,30 +819,24 @@ const App = () => {
     });
 
     doc.deletePage(1);
-    const totalPages = pdfDoc.numPages;
     const exportScale = 2.0;
 
     const strokeArrowExport = (ctx, x1, y1, x2, y2, headLenPx) => {
-      ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
-      ctx.stroke();
-
-      const angle = Math.atan2(y2 - y1, x2 - x1);
-      const a1 = angle - Math.PI / 7;
-      const a2 = angle + Math.PI / 7;
-
-      const hx1 = x2 - headLenPx * Math.cos(a1);
-      const hy1 = y2 - headLenPx * Math.sin(a1);
-      const hx2 = x2 - headLenPx * Math.cos(a2);
-      const hy2 = y2 - headLenPx * Math.sin(a2);
-
-      ctx.beginPath();
-      ctx.moveTo(x2, y2);
-      ctx.lineTo(hx1, hy1);
-      ctx.moveTo(x2, y2);
-      ctx.lineTo(hx2, hy2);
-      ctx.stroke();
+       ctx.beginPath();
+       ctx.moveTo(x1, y1);
+       ctx.lineTo(x2, y2);
+       ctx.stroke();
+       const angle = Math.atan2(y2 - y1, x2 - x1);
+       const hx1 = x2 - headLenPx * Math.cos(angle - Math.PI / 7);
+       const hy1 = y2 - headLenPx * Math.sin(angle - Math.PI / 7);
+       const hx2 = x2 - headLenPx * Math.cos(angle + Math.PI / 7);
+       const hy2 = y2 - headLenPx * Math.sin(angle + Math.PI / 7);
+       ctx.beginPath();
+       ctx.moveTo(x2, y2);
+       ctx.lineTo(hx1, hy1);
+       ctx.moveTo(x2, y2);
+       ctx.lineTo(hx2, hy2);
+       ctx.stroke();
     };
 
     for (let i = 1; i <= totalPages; i++) {
@@ -907,7 +867,6 @@ const App = () => {
         ctx.fillStyle = ann.color;
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
-
         const s = exportScale;
 
         if (ann.type === "pen" || ann.type === "eraser") {
@@ -923,19 +882,11 @@ const App = () => {
           ctx.lineTo(ann.end.x * s, ann.end.y * s);
           ctx.stroke();
         } else if (ann.type === "arrow") {
-          const x1 = ann.start.x * s;
-          const y1 = ann.start.y * s;
-          const x2 = ann.end.x * s;
-          const y2 = ann.end.y * s;
           const head = Math.max(10, ann.width * 3) * s;
-          strokeArrowExport(ctx, x1, y1, x2, y2, head);
+          strokeArrowExport(ctx, ann.start.x * s, ann.start.y * s, ann.end.x * s, ann.end.y * s, head);
         } else if (ann.type === "rect") {
-          const rx = ann.start.x * s;
-          const ry = ann.start.y * s;
-          const rw = (ann.end.x - ann.start.x) * s;
-          const rh = (ann.end.y - ann.start.y) * s;
           ctx.beginPath();
-          ctx.rect(rx, ry, rw, rh);
+          ctx.rect(ann.start.x * s, ann.start.y * s, (ann.end.x - ann.start.x) * s, (ann.end.y - ann.start.y) * s);
           if (ann.filled) ctx.fill();
           ctx.stroke();
         } else if (ann.type === "circle") {
@@ -944,11 +895,11 @@ const App = () => {
           if (ann.filled) ctx.fill();
           ctx.stroke();
         } else if (ann.type === "text") {
-          ctx.font = `${ann.size * s}px ui-sans-serif, system-ui, sans-serif`;
+          ctx.font = `${ann.size * s}px sans-serif`;
           ctx.textBaseline = "top";
+          ctx.fillStyle = ann.color;
           ctx.fillText(ann.text, ann.x * s, ann.y * s);
         }
-
         ctx.restore();
       });
 
@@ -959,263 +910,258 @@ const App = () => {
     doc.save(`edited_${fileName}`);
   };
 
-  const zoomIn = () => setScale((s) => Math.min(4, s + 0.15));
-  const zoomOut = () => setScale((s) => Math.max(0.25, s - 0.15));
+  const uploadDisabled = !pdfEngineReady;
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-[#F3F4F6] text-slate-900">
-      {/* ===================== TOP DARK BAR (like screenshot) ===================== */}
-      <div className="h-12 bg-[#0B0F1A] text-white flex items-center justify-between px-3">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center">
-            <span className="text-xs font-semibold">PDF</span>
-          </div>
-          <div className="font-semibold tracking-tight">PDF Editor</div>
-
-          <div className="flex items-center gap-2 ml-2 text-white/70">
-            <IconPillButton title="Cloud">
-              <Cloud size={16} />
-            </IconPillButton>
-            <IconPillButton title="Undo (demo)">
-              <Undo2 size={16} />
-            </IconPillButton>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {/* Code / Preview segmented */}
-          <div className="flex items-center bg-white/10 rounded-full p-1">
-            <button
-              className="px-3 py-1 rounded-full text-xs font-medium text-white/70 hover:text-white flex items-center gap-2"
-              type="button"
+    <div className="flex flex-col h-screen bg-gray-100 font-sans text-gray-800">
+      {/* Header / Toolbar */}
+      <div className="bg-white border-b shadow-sm p-3 flex flex-wrap items-center justify-between gap-3 z-10 shrink-0">
+        <div className="flex items-center gap-3 overflow-x-auto no-scrollbar max-w-[60vw] md:max-w-none">
+          {/* File Upload */}
+          <div className="flex items-center gap-2 bg-gray-50 p-1 rounded-lg border shrink-0">
+            <label
+              htmlFor="pdf-upload"
+              className={`p-2 rounded flex items-center gap-2 text-sm font-medium transition-colors ${
+                uploadDisabled
+                  ? "text-gray-400 cursor-not-allowed"
+                  : "text-gray-700 hover:bg-gray-200 cursor-pointer"
+              }`}
             >
-              <Code2 size={14} />
-              Code
-            </button>
-            <button
-              className="px-3 py-1 rounded-full text-xs font-medium bg-white text-black flex items-center gap-2"
-              type="button"
-            >
-              <Eye size={14} />
-              Preview
-            </button>
+              <Upload size={18} />
+              <span className="hidden sm:inline">
+                {uploadDisabled ? "Init..." : "Open"}
+              </span>
+            </label>
+            <input
+              id="pdf-upload"
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf"
+              className="hidden"
+              onChange={handleFileUpload}
+              disabled={uploadDisabled}
+            />
           </div>
 
-          <button
-            className="px-3 py-1.5 rounded-full bg-[#1D4ED8] hover:bg-[#1E40AF] text-white text-xs font-semibold flex items-center gap-2"
-            type="button"
-          >
-            <Share2 size={14} />
-            Share
-          </button>
+          <div className="h-6 w-px bg-gray-300 mx-1 shrink-0"></div>
 
-          <button
-            className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/15 flex items-center justify-center"
-            title="Close (demo)"
-            type="button"
-          >
-            ✕
-          </button>
-        </div>
-      </div>
-
-      {/* ===================== LIGHT TOOLBAR ROW ===================== */}
-      <div className="bg-white border-b border-slate-200 h-14 flex items-center justify-between px-3">
-        <div className="flex items-center gap-2">
-          {/* Open button */}
-          <label
-            htmlFor="pdf-upload"
-            className="flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 cursor-pointer text-sm font-medium"
-            title="Open PDF"
-          >
-            <Upload size={16} />
-            Open
-          </label>
-          <input
-            id="pdf-upload"
-            ref={fileInputRef}
-            type="file"
-            accept=".pdf"
-            className="hidden"
-            onChange={handleFileUpload}
-          />
-
-          <div className="w-px h-7 bg-slate-200 mx-2" />
-
-          {/* Tool icons row (like screenshot) */}
-          <div className="flex items-center gap-1 bg-white rounded-xl border border-slate-200 p-1">
-            <ToolIcon
+          {/* Drawing Tools */}
+          <div className="flex items-center gap-1 bg-gray-50 p-1 rounded-lg border shrink-0">
+            <ToolButton
               active={activeTool === "cursor"}
               onClick={() => setActiveTool("cursor")}
-              title="Select / Move (drag object). Pan: drag empty / right / middle / SPACE"
-            >
-              <MousePointer size={16} />
-            </ToolIcon>
-
-            <ToolIcon active={activeTool === "pen"} onClick={() => setActiveTool("pen")} title="Pen">
-              <Pen size={16} />
-            </ToolIcon>
-
-            <ToolIcon active={activeTool === "eraser"} onClick={() => setActiveTool("eraser")} title="Eraser">
-              <Eraser size={16} />
-            </ToolIcon>
-
-            <div className="w-px h-6 bg-slate-200 mx-1" />
-
-            <ToolIcon active={activeTool === "line"} onClick={() => setActiveTool("line")} title="Line">
-              <Minus size={16} />
-            </ToolIcon>
-
-            <ToolIcon active={activeTool === "arrow"} onClick={() => setActiveTool("arrow")} title="Arrow">
-              <ArrowRight size={16} />
-            </ToolIcon>
-
-            <ToolIcon active={activeTool === "rect"} onClick={() => setActiveTool("rect")} title="Rectangle">
-              <Square size={16} />
-            </ToolIcon>
-
-            <ToolIcon active={activeTool === "circle"} onClick={() => setActiveTool("circle")} title="Circle">
-              <Circle size={16} />
-            </ToolIcon>
-
-            <ToolIcon active={activeTool === "text"} onClick={() => setActiveTool("text")} title="Text">
-              <Type size={16} />
-            </ToolIcon>
+              icon={<MousePointer size={18} />}
+              label="Select/Move"
+            />
+            <ToolButton
+              active={activeTool === "pen"}
+              onClick={() => setActiveTool("pen")}
+              icon={<Pen size={18} />}
+              label="Pen"
+            />
+            <ToolButton
+              active={activeTool === "eraser"}
+              onClick={() => setActiveTool("eraser")}
+              icon={<Eraser size={18} />}
+              label="Eraser"
+            />
+            <div className="w-px h-6 bg-gray-200 mx-1"></div>
+            <ToolButton
+              active={activeTool === "line"}
+              onClick={() => setActiveTool("line")}
+              icon={<Minus size={18} />}
+              label="Line"
+            />
+            <ToolButton
+              active={activeTool === "arrow"}
+              onClick={() => setActiveTool("arrow")}
+              icon={<ArrowRight size={18} />}
+              label="Arrow"
+            />
+            <ToolButton
+              active={activeTool === "rect"}
+              onClick={() => setActiveTool("rect")}
+              icon={<Square size={18} />}
+              label="Rectangle"
+            />
+            <ToolButton
+              active={activeTool === "circle"}
+              onClick={() => setActiveTool("circle")}
+              icon={<Circle size={18} />}
+              label="Circle"
+            />
+            <ToolButton
+              active={activeTool === "text"}
+              onClick={() => setActiveTool("text")}
+              icon={<Type size={18} />}
+              label="Text"
+            />
           </div>
 
-          <div className="w-px h-7 bg-slate-200 mx-2" />
+          <div className="h-6 w-px bg-gray-300 mx-1 shrink-0"></div>
 
-          {/* Simple style controls (kept, but compact) */}
-          {activeTool !== "eraser" && (
-            <div className="flex items-center gap-3">
+          {/* Properties */}
+          {activeTool !== "eraser" && activeTool !== "cursor" && (
+            <div className="flex items-center gap-3 shrink-0 animate-in fade-in zoom-in duration-200">
               <input
                 type="color"
                 value={color}
                 onChange={(e) => setColor(e.target.value)}
-                className="w-9 h-9 rounded-xl cursor-pointer border border-slate-200 bg-white p-1"
-                title="Color"
+                className="w-8 h-8 rounded cursor-pointer border-0 p-0 shadow-sm"
               />
-
               <button
                 onClick={() => setIsFilled(!isFilled)}
-                className={`w-9 h-9 rounded-xl border border-slate-200 flex items-center justify-center ${
-                  isFilled ? "bg-slate-900 text-white" : "bg-white text-slate-500 hover:bg-slate-50"
-                }`}
-                title="Fill shapes"
-                type="button"
+                className={`p-2 rounded hover:bg-gray-200 ${isFilled ? "bg-blue-100 text-blue-600" : "text-gray-500"}`}
+                title="Toggle Fill"
               >
-                <PaintBucket size={16} />
+                <PaintBucket size={18} />
               </button>
-
-              <div className="flex items-center gap-2">
-                <input
+              <div className="flex flex-col w-20">
+                 <input
                   type="range"
-                  min={activeTool === "text" ? 8 : 1}
-                  max={activeTool === "text" ? 72 : 10}
-                  value={activeTool === "text" ? fontSize : lineWidth}
-                  onChange={(e) => {
-                    const v = parseInt(e.target.value, 10);
-                    if (activeTool === "text") setFontSize(v);
-                    else setLineWidth(v);
-                  }}
-                  className="w-28"
-                  title={activeTool === "text" ? "Font size" : "Line width"}
+                  min={activeTool === 'text' ? "8" : "1"}
+                  max={activeTool === 'text' ? "72" : "20"}
+                  value={activeTool === 'text' ? fontSize : lineWidth}
+                  onChange={(e) => activeTool === 'text' ? setFontSize(parseInt(e.target.value)) : setLineWidth(parseInt(e.target.value))}
+                  className="h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
                 />
-                <div className="text-xs text-slate-500 w-10 text-right">
-                  {activeTool === "text" ? `${fontSize}px` : `${lineWidth}px`}
-                </div>
               </div>
             </div>
           )}
         </div>
 
-        {/* Right-side toolbar controls (zoom / undo / trash / save) */}
-        <div className="flex items-center gap-2">
-          <IconButton title="Zoom in" onClick={zoomIn}>
-            <ZoomIn size={18} />
-          </IconButton>
-          <IconButton title="Zoom out" onClick={zoomOut}>
-            <ZoomOut size={18} />
-          </IconButton>
+        {/* Right Actions: Pagination & Export */}
+        <div className="flex items-center gap-3 shrink-0 ml-auto">
+          {/* Pagination Controls */}
+          {pdfDoc && (
+             <div className="flex items-center gap-1 bg-gray-50 p-1 rounded-lg border">
+                <button 
+                  onClick={() => changePage(-1)}
+                  disabled={pageNum <= 1}
+                  className="p-1 hover:bg-gray-200 rounded disabled:opacity-30"
+                >
+                  <ChevronLeft size={18} />
+                </button>
+                <span className="text-sm font-medium min-w-[3rem] text-center">
+                   {pageNum} / {totalPages}
+                </span>
+                <button 
+                  onClick={() => changePage(1)}
+                  disabled={pageNum >= totalPages}
+                  className="p-1 hover:bg-gray-200 rounded disabled:opacity-30"
+                >
+                  <ChevronRight size={18} />
+                </button>
+             </div>
+          )}
 
-          <div className="w-px h-7 bg-slate-200 mx-2" />
+          <div className="h-6 w-px bg-gray-300 mx-1"></div>
 
-          <IconButton title="Undo" onClick={undoLast}>
+          <div className="flex items-center gap-1">
+             <button
+               onClick={() => setScale(s => Math.min(5, s + 0.1))}
+               className="p-2 hover:bg-gray-100 rounded text-gray-600 hidden sm:block"
+               title="Zoom In"
+             >
+               <ZoomIn size={18} />
+             </button>
+             <button
+               onClick={() => setScale(s => Math.max(0.25, s - 0.1))}
+               className="p-2 hover:bg-gray-100 rounded text-gray-600 hidden sm:block"
+               title="Zoom Out"
+             >
+               <ZoomOut size={18} />
+             </button>
+          </div>
+
+          <button
+            onClick={undoLast}
+            className="p-2 hover:bg-gray-100 rounded text-gray-600"
+            title="Undo"
+          >
             <RotateCcw size={18} />
-          </IconButton>
-
-          <IconButton title="Clear page" onClick={clearPage} danger>
+          </button>
+          
+          <button
+            onClick={() => {
+               if(confirm("Clear all annotations on this page?")) {
+                  setAnnotations(prev => ({ ...prev, [pageNum]: [] }));
+               }
+            }}
+            className="p-2 hover:bg-red-50 text-red-500 rounded"
+            title="Clear Page"
+          >
             <Trash2 size={18} />
-          </IconButton>
+          </button>
 
           <button
             onClick={exportPDF}
             disabled={!pdfDoc}
-            className={`ml-2 px-4 py-2 rounded-xl text-sm font-semibold border ${
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
               !pdfDoc
-                ? "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed"
-                : "bg-white hover:bg-slate-50 text-slate-900 border-slate-200"
-            } flex items-center gap-2`}
-            type="button"
+                ? "bg-gray-200 text-gray-400 cursor-not-allowed"
+                : "bg-blue-600 hover:bg-blue-700 text-white shadow-sm"
+            }`}
           >
-            <Save size={16} />
-            Save
+            <Save size={18} />
+            <span className="hidden sm:inline">Save</span>
           </button>
         </div>
       </div>
 
-      {/* ===================== WORKSPACE ===================== */}
+      {/* Main Workspace */}
       <div
         ref={scrollContainerRef}
-        className="flex-1 overflow-auto bg-[#E5E7EB] relative"
-        style={{ userSelect: "none", touchAction: "none" }}
+        className="flex-1 overflow-auto bg-gray-200 relative cursor-default"
+        style={{ touchAction: "none" }}
         onPointerDown={handleContainerPointerDown}
-        onPointerMove={handleContainerPointerMove}
-        onPointerUp={handleContainerPointerUp}
-        onPointerCancel={handleContainerPointerUp}
-        onPointerLeave={handleContainerPointerUp}
         onContextMenu={(e) => e.preventDefault()}
       >
         {!pdfDoc ? (
-          // Empty state card – matches screenshot vibe
-          <div className="h-full w-full flex items-center justify-center p-6">
-            <div className="w-[360px] max-w-[90vw] bg-white rounded-2xl shadow-sm border border-slate-200 p-8 text-center">
-              <div className="w-16 h-16 rounded-full bg-[#EAF2FF] mx-auto flex items-center justify-center mb-4">
-                <Upload className="text-[#2563EB]" size={26} />
-              </div>
-              <div className="text-lg font-semibold text-slate-900">Upload a Document</div>
-              <div className="text-sm text-slate-500 mt-1">
-                Select a PDF file to start annotating.
-              </div>
-
-              <label
-                htmlFor="pdf-upload"
-                className="inline-flex items-center justify-center mt-6 px-5 py-2.5 rounded-xl bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-sm font-semibold cursor-pointer"
+          <div className="flex flex-col items-center justify-center h-full p-8 text-gray-500">
+             <div className="bg-white p-10 rounded-2xl shadow-sm text-center max-w-md border border-gray-100">
+               <div className="bg-blue-50 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6">
+                 <Upload size={32} className="text-blue-600" />
+               </div>
+               <h3 className="text-xl font-bold text-gray-800 mb-2">Upload a Document</h3>
+               <p className="mb-8 text-gray-500">Select a PDF file to start annotating.</p>
+               <label
+                className={`px-6 py-3 rounded-xl font-medium transition inline-block ${
+                  uploadDisabled
+                    ? "bg-gray-100 text-gray-400 cursor-wait"
+                    : "bg-blue-600 text-white hover:bg-blue-700 hover:shadow-lg hover:-translate-y-0.5 transform duration-200 cursor-pointer"
+                }`}
               >
-                Choose PDF File
+                {uploadDisabled ? "Initializing..." : "Choose PDF File"}
+                <input
+                  type="file"
+                  accept=".pdf"
+                  className="hidden"
+                  onChange={handleFileUpload}
+                  disabled={uploadDisabled}
+                />
               </label>
-            </div>
+             </div>
           </div>
         ) : (
-          <div className="p-8 w-max h-max">
+          <div className="p-8 w-max h-max mx-auto">
             <div
-              className="relative shadow-[0_20px_60px_rgba(0,0,0,0.15)] origin-top-left bg-white"
+              className="relative shadow-xl origin-top-left ring-1 ring-black/5"
               style={{
                 width: "fit-content",
                 height: "fit-content",
                 cursor: isPanningState
                   ? "grabbing"
                   : activeTool === "cursor"
-                  ? "grab"
+                  ? "default"
                   : "crosshair",
               }}
-              title="Pan: drag empty area, middle mouse, right mouse, or hold SPACE + drag"
             >
               <canvas ref={pdfCanvasRef} className="bg-white block" />
-
               <canvas
                 ref={canvasRef}
                 className="absolute top-0 left-0"
+                style={{ touchAction: "none" }}
                 onPointerDown={handleCanvasPointerDown}
                 onPointerMove={handleCanvasPointerMove}
                 onPointerUp={handleCanvasPointerUp}
@@ -1237,20 +1183,21 @@ const App = () => {
                     ref={textInputRef}
                     autoFocus
                     value={textInput.text}
-                    onChange={(e) => setTextInput({ ...textInput, text: e.target.value })}
+                    onChange={(e) =>
+                      setTextInput({ ...textInput, text: e.target.value })
+                    }
                     onBlur={handleInputBlur}
                     onKeyDown={handleTextSubmit}
-                    className="bg-white border border-[#2563EB] rounded-xl px-3 py-2 outline-none shadow-lg min-w-[220px]"
+                    className="bg-white border border-blue-500 rounded px-2 py-1 outline-none text-blue-900 placeholder-blue-300 shadow-lg min-w-[200px]"
                     style={{
                       fontSize: `${fontSize * scale}px`,
-                      fontFamily: "ui-sans-serif, system-ui, sans-serif",
+                      fontFamily: "sans-serif",
                       color,
                       lineHeight: 1.2,
                     }}
                     placeholder="Type..."
                     onPointerDown={(e) => e.stopPropagation()}
                   />
-
                   <button
                     onMouseDown={(e) => {
                       e.preventDefault();
@@ -1258,9 +1205,8 @@ const App = () => {
                       handlePolishText();
                     }}
                     disabled={isPolishing || !textInput.text}
-                    className="bg-[#4F46E5] text-white p-2 rounded-xl shadow-lg hover:bg-[#4338CA] disabled:opacity-50"
-                    title="Rewrite with AI (optional)"
-                    type="button"
+                    className="bg-indigo-600 text-white p-1.5 rounded-full shadow-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                    title="AI Polish"
                   >
                     {isPolishing ? (
                       <Loader2 size={16} className="animate-spin" />
@@ -1273,71 +1219,22 @@ const App = () => {
             </div>
           </div>
         )}
-
-        {/* Floating right-side pill (visual only, like screenshot) */}
-        <div className="fixed right-6 bottom-10 hidden md:flex flex-col items-center gap-3 bg-black/85 text-white rounded-2xl px-2 py-3 shadow-lg">
-          <div className="w-7 h-7 rounded-xl bg-white/10 flex items-center justify-center" title="Menu (demo)">
-            <div className="grid grid-cols-3 gap-1">
-              <span className="w-1 h-1 bg-white/80 rounded-full" />
-              <span className="w-1 h-1 bg-white/80 rounded-full" />
-              <span className="w-1 h-1 bg-white/80 rounded-full" />
-              <span className="w-1 h-1 bg-white/80 rounded-full" />
-              <span className="w-1 h-1 bg-white/80 rounded-full" />
-              <span className="w-1 h-1 bg-white/80 rounded-full" />
-              <span className="w-1 h-1 bg-white/80 rounded-full" />
-              <span className="w-1 h-1 bg-white/80 rounded-full" />
-              <span className="w-1 h-1 bg-white/80 rounded-full" />
-            </div>
-          </div>
-          <div className="w-7 h-7 rounded-xl bg-white/10 flex items-center justify-center" title="Tools (demo)">
-            ✦
-          </div>
-          <div className="w-7 h-7 rounded-xl bg-white/10 flex items-center justify-center" title="Dock (demo)">
-            ▥
-          </div>
-        </div>
       </div>
     </div>
   );
 };
 
-/* ===================== Small UI helpers ===================== */
-
-const ToolIcon = ({ active, onClick, title, children }) => (
+const ToolButton = ({ active, onClick, icon, label }) => (
   <button
     onClick={onClick}
-    title={title}
-    type="button"
-    className={`w-10 h-10 rounded-xl flex items-center justify-center border transition ${
+    className={`p-2 rounded flex items-center justify-center transition-all ${
       active
-        ? "bg-[#EAF2FF] text-[#2563EB] border-[#BFDBFE]"
-        : "bg-white text-slate-600 border-transparent hover:bg-slate-50 hover:border-slate-200"
+        ? "bg-blue-100 text-blue-700 shadow-inner"
+        : "hover:bg-gray-200 text-gray-600"
     }`}
+    title={label}
   >
-    {children}
-  </button>
-);
-
-const IconButton = ({ title, onClick, children, danger = false }) => (
-  <button
-    type="button"
-    title={title}
-    onClick={onClick}
-    className={`w-10 h-10 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 flex items-center justify-center ${
-      danger ? "text-red-500 hover:bg-red-50" : "text-slate-700"
-    }`}
-  >
-    {children}
-  </button>
-);
-
-const IconPillButton = ({ title, children }) => (
-  <button
-    type="button"
-    title={title}
-    className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/15 flex items-center justify-center"
-  >
-    {children}
+    {icon}
   </button>
 );
 
