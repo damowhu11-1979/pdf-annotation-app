@@ -856,4 +856,489 @@ const App = () => {
     const totalPages = pdfDoc.numPages;
     const exportScale = 2.0;
 
-    const strokeArro
+    const strokeArrowExport = (ctx, x1, y1, x2, y2, headLenPx) => {
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+
+      const angle = Math.atan2(y2 - y1, x2 - x1);
+      const a1 = angle - Math.PI / 7;
+      const a2 = angle + Math.PI / 7;
+
+      const hx1 = x2 - headLenPx * Math.cos(a1);
+      const hy1 = y2 - headLenPx * Math.sin(a1);
+      const hx2 = x2 - headLenPx * Math.cos(a2);
+      const hy2 = y2 - headLenPx * Math.sin(a2);
+
+      ctx.beginPath();
+      ctx.moveTo(x2, y2);
+      ctx.lineTo(hx1, hy1);
+      ctx.moveTo(x2, y2);
+      ctx.lineTo(hx2, hy2);
+      ctx.stroke();
+    };
+
+    for (let i = 1; i <= totalPages; i++) {
+      const page = await pdfDoc.getPage(i);
+      const originalViewport = page.getViewport({ scale: 1.0 });
+
+      doc.addPage(
+        [originalViewport.width, originalViewport.height],
+        originalViewport.width > originalViewport.height ? "l" : "p"
+      );
+
+      const viewport = page.getViewport({ scale: exportScale });
+      const canvas = document.createElement("canvas");
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      const ctx = canvas.getContext("2d");
+
+      await page.render({ canvasContext: ctx, viewport }).promise;
+
+      const pageAnns = annotations[i] || [];
+      pageAnns.forEach((ann) => {
+        ctx.save();
+        if (ann.type === "eraser") ctx.globalCompositeOperation = "destination-out";
+        else ctx.globalCompositeOperation = "source-over";
+
+        ctx.strokeStyle = ann.color;
+        ctx.lineWidth = ann.width * exportScale;
+        ctx.fillStyle = ann.color;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+
+        const s = exportScale;
+
+        if (ann.type === "pen" || ann.type === "eraser") {
+          ctx.beginPath();
+          if (ann.points.length > 0) {
+            ctx.moveTo(ann.points[0].x * s, ann.points[0].y * s);
+            ann.points.forEach((p) => ctx.lineTo(p.x * s, p.y * s));
+          }
+          ctx.stroke();
+        } else if (ann.type === "line") {
+          ctx.beginPath();
+          ctx.moveTo(ann.start.x * s, ann.start.y * s);
+          ctx.lineTo(ann.end.x * s, ann.end.y * s);
+          ctx.stroke();
+        } else if (ann.type === "arrow") {
+          const x1 = ann.start.x * s;
+          const y1 = ann.start.y * s;
+          const x2 = ann.end.x * s;
+          const y2 = ann.end.y * s;
+          const head = Math.max(10, ann.width * 3) * s;
+          strokeArrowExport(ctx, x1, y1, x2, y2, head);
+        } else if (ann.type === "rect") {
+          const rx = ann.start.x * s;
+          const ry = ann.start.y * s;
+          const rw = (ann.end.x - ann.start.x) * s;
+          const rh = (ann.end.y - ann.start.y) * s;
+          ctx.beginPath();
+          ctx.rect(rx, ry, rw, rh);
+          if (ann.filled) ctx.fill();
+          ctx.stroke();
+        } else if (ann.type === "circle") {
+          ctx.beginPath();
+          ctx.arc(ann.center.x * s, ann.center.y * s, ann.radius * s, 0, 2 * Math.PI);
+          if (ann.filled) ctx.fill();
+          ctx.stroke();
+        } else if (ann.type === "text") {
+          ctx.font = `${ann.size * s}px ui-sans-serif, system-ui, sans-serif`;
+          ctx.textBaseline = "top";
+          ctx.fillText(ann.text, ann.x * s, ann.y * s);
+        }
+
+        ctx.restore();
+      });
+
+      const imgData = canvas.toDataURL("image/jpeg", 0.95);
+      doc.addImage(imgData, "JPEG", 0, 0, originalViewport.width, originalViewport.height);
+    }
+
+    doc.save(`edited_${fileName}`);
+  };
+
+  const zoomIn = () => setScale((s) => Math.min(4, s + 0.15));
+  const zoomOut = () => setScale((s) => Math.max(0.25, s - 0.15));
+
+  return (
+    <div className="h-screen w-screen flex flex-col bg-[#F3F4F6] text-slate-900">
+      {/* ===================== TOP DARK BAR (like screenshot) ===================== */}
+      <div className="h-12 bg-[#0B0F1A] text-white flex items-center justify-between px-3">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center">
+            <span className="text-xs font-semibold">PDF</span>
+          </div>
+          <div className="font-semibold tracking-tight">PDF Editor</div>
+
+          <div className="flex items-center gap-2 ml-2 text-white/70">
+            <IconPillButton title="Cloud">
+              <Cloud size={16} />
+            </IconPillButton>
+            <IconPillButton title="Undo (demo)">
+              <Undo2 size={16} />
+            </IconPillButton>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {/* Code / Preview segmented */}
+          <div className="flex items-center bg-white/10 rounded-full p-1">
+            <button
+              className="px-3 py-1 rounded-full text-xs font-medium text-white/70 hover:text-white flex items-center gap-2"
+              type="button"
+            >
+              <Code2 size={14} />
+              Code
+            </button>
+            <button
+              className="px-3 py-1 rounded-full text-xs font-medium bg-white text-black flex items-center gap-2"
+              type="button"
+            >
+              <Eye size={14} />
+              Preview
+            </button>
+          </div>
+
+          <button
+            className="px-3 py-1.5 rounded-full bg-[#1D4ED8] hover:bg-[#1E40AF] text-white text-xs font-semibold flex items-center gap-2"
+            type="button"
+          >
+            <Share2 size={14} />
+            Share
+          </button>
+
+          <button
+            className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/15 flex items-center justify-center"
+            title="Close (demo)"
+            type="button"
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+
+      {/* ===================== LIGHT TOOLBAR ROW ===================== */}
+      <div className="bg-white border-b border-slate-200 h-14 flex items-center justify-between px-3">
+        <div className="flex items-center gap-2">
+          {/* Open button */}
+          <label
+            htmlFor="pdf-upload"
+            className="flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 cursor-pointer text-sm font-medium"
+            title="Open PDF"
+          >
+            <Upload size={16} />
+            Open
+          </label>
+          <input
+            id="pdf-upload"
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf"
+            className="hidden"
+            onChange={handleFileUpload}
+          />
+
+          <div className="w-px h-7 bg-slate-200 mx-2" />
+
+          {/* Tool icons row (like screenshot) */}
+          <div className="flex items-center gap-1 bg-white rounded-xl border border-slate-200 p-1">
+            <ToolIcon
+              active={activeTool === "cursor"}
+              onClick={() => setActiveTool("cursor")}
+              title="Select / Move (drag object). Pan: drag empty / right / middle / SPACE"
+            >
+              <MousePointer size={16} />
+            </ToolIcon>
+
+            <ToolIcon active={activeTool === "pen"} onClick={() => setActiveTool("pen")} title="Pen">
+              <Pen size={16} />
+            </ToolIcon>
+
+            <ToolIcon active={activeTool === "eraser"} onClick={() => setActiveTool("eraser")} title="Eraser">
+              <Eraser size={16} />
+            </ToolIcon>
+
+            <div className="w-px h-6 bg-slate-200 mx-1" />
+
+            <ToolIcon active={activeTool === "line"} onClick={() => setActiveTool("line")} title="Line">
+              <Minus size={16} />
+            </ToolIcon>
+
+            <ToolIcon active={activeTool === "arrow"} onClick={() => setActiveTool("arrow")} title="Arrow">
+              <ArrowRight size={16} />
+            </ToolIcon>
+
+            <ToolIcon active={activeTool === "rect"} onClick={() => setActiveTool("rect")} title="Rectangle">
+              <Square size={16} />
+            </ToolIcon>
+
+            <ToolIcon active={activeTool === "circle"} onClick={() => setActiveTool("circle")} title="Circle">
+              <Circle size={16} />
+            </ToolIcon>
+
+            <ToolIcon active={activeTool === "text"} onClick={() => setActiveTool("text")} title="Text">
+              <Type size={16} />
+            </ToolIcon>
+          </div>
+
+          <div className="w-px h-7 bg-slate-200 mx-2" />
+
+          {/* Simple style controls (kept, but compact) */}
+          {activeTool !== "eraser" && (
+            <div className="flex items-center gap-3">
+              <input
+                type="color"
+                value={color}
+                onChange={(e) => setColor(e.target.value)}
+                className="w-9 h-9 rounded-xl cursor-pointer border border-slate-200 bg-white p-1"
+                title="Color"
+              />
+
+              <button
+                onClick={() => setIsFilled(!isFilled)}
+                className={`w-9 h-9 rounded-xl border border-slate-200 flex items-center justify-center ${
+                  isFilled ? "bg-slate-900 text-white" : "bg-white text-slate-500 hover:bg-slate-50"
+                }`}
+                title="Fill shapes"
+                type="button"
+              >
+                <PaintBucket size={16} />
+              </button>
+
+              <div className="flex items-center gap-2">
+                <input
+                  type="range"
+                  min={activeTool === "text" ? 8 : 1}
+                  max={activeTool === "text" ? 72 : 10}
+                  value={activeTool === "text" ? fontSize : lineWidth}
+                  onChange={(e) => {
+                    const v = parseInt(e.target.value, 10);
+                    if (activeTool === "text") setFontSize(v);
+                    else setLineWidth(v);
+                  }}
+                  className="w-28"
+                  title={activeTool === "text" ? "Font size" : "Line width"}
+                />
+                <div className="text-xs text-slate-500 w-10 text-right">
+                  {activeTool === "text" ? `${fontSize}px` : `${lineWidth}px`}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Right-side toolbar controls (zoom / undo / trash / save) */}
+        <div className="flex items-center gap-2">
+          <IconButton title="Zoom in" onClick={zoomIn}>
+            <ZoomIn size={18} />
+          </IconButton>
+          <IconButton title="Zoom out" onClick={zoomOut}>
+            <ZoomOut size={18} />
+          </IconButton>
+
+          <div className="w-px h-7 bg-slate-200 mx-2" />
+
+          <IconButton title="Undo" onClick={undoLast}>
+            <RotateCcw size={18} />
+          </IconButton>
+
+          <IconButton title="Clear page" onClick={clearPage} danger>
+            <Trash2 size={18} />
+          </IconButton>
+
+          <button
+            onClick={exportPDF}
+            disabled={!pdfDoc}
+            className={`ml-2 px-4 py-2 rounded-xl text-sm font-semibold border ${
+              !pdfDoc
+                ? "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed"
+                : "bg-white hover:bg-slate-50 text-slate-900 border-slate-200"
+            } flex items-center gap-2`}
+            type="button"
+          >
+            <Save size={16} />
+            Save
+          </button>
+        </div>
+      </div>
+
+      {/* ===================== WORKSPACE ===================== */}
+      <div
+        ref={scrollContainerRef}
+        className="flex-1 overflow-auto bg-[#E5E7EB] relative"
+        style={{ userSelect: "none", touchAction: "none" }}
+        onPointerDown={handleContainerPointerDown}
+        onPointerMove={handleContainerPointerMove}
+        onPointerUp={handleContainerPointerUp}
+        onPointerCancel={handleContainerPointerUp}
+        onPointerLeave={handleContainerPointerUp}
+        onContextMenu={(e) => e.preventDefault()}
+      >
+        {!pdfDoc ? (
+          // Empty state card – matches screenshot vibe
+          <div className="h-full w-full flex items-center justify-center p-6">
+            <div className="w-[360px] max-w-[90vw] bg-white rounded-2xl shadow-sm border border-slate-200 p-8 text-center">
+              <div className="w-16 h-16 rounded-full bg-[#EAF2FF] mx-auto flex items-center justify-center mb-4">
+                <Upload className="text-[#2563EB]" size={26} />
+              </div>
+              <div className="text-lg font-semibold text-slate-900">Upload a Document</div>
+              <div className="text-sm text-slate-500 mt-1">
+                Select a PDF file to start annotating.
+              </div>
+
+              <label
+                htmlFor="pdf-upload"
+                className="inline-flex items-center justify-center mt-6 px-5 py-2.5 rounded-xl bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-sm font-semibold cursor-pointer"
+              >
+                Choose PDF File
+              </label>
+            </div>
+          </div>
+        ) : (
+          <div className="p-8 w-max h-max">
+            <div
+              className="relative shadow-[0_20px_60px_rgba(0,0,0,0.15)] origin-top-left bg-white"
+              style={{
+                width: "fit-content",
+                height: "fit-content",
+                cursor: isPanningState
+                  ? "grabbing"
+                  : activeTool === "cursor"
+                  ? "grab"
+                  : "crosshair",
+              }}
+              title="Pan: drag empty area, middle mouse, right mouse, or hold SPACE + drag"
+            >
+              <canvas ref={pdfCanvasRef} className="bg-white block" />
+
+              <canvas
+                ref={canvasRef}
+                className="absolute top-0 left-0"
+                onPointerDown={handleCanvasPointerDown}
+                onPointerMove={handleCanvasPointerMove}
+                onPointerUp={handleCanvasPointerUp}
+                onPointerCancel={handleCanvasPointerUp}
+                onPointerLeave={handleCanvasPointerUp}
+                onContextMenu={(e) => e.preventDefault()}
+              />
+
+              {/* Text Input Overlay */}
+              {textInput && (
+                <div
+                  className="absolute z-50 flex items-center gap-2"
+                  style={{
+                    left: textInput.x * scale,
+                    top: textInput.y * scale - 8,
+                  }}
+                >
+                  <input
+                    ref={textInputRef}
+                    autoFocus
+                    value={textInput.text}
+                    onChange={(e) => setTextInput({ ...textInput, text: e.target.value })}
+                    onBlur={handleInputBlur}
+                    onKeyDown={handleTextSubmit}
+                    className="bg-white border border-[#2563EB] rounded-xl px-3 py-2 outline-none shadow-lg min-w-[220px]"
+                    style={{
+                      fontSize: `${fontSize * scale}px`,
+                      fontFamily: "ui-sans-serif, system-ui, sans-serif",
+                      color,
+                      lineHeight: 1.2,
+                    }}
+                    placeholder="Type..."
+                    onPointerDown={(e) => e.stopPropagation()}
+                  />
+
+                  <button
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handlePolishText();
+                    }}
+                    disabled={isPolishing || !textInput.text}
+                    className="bg-[#4F46E5] text-white p-2 rounded-xl shadow-lg hover:bg-[#4338CA] disabled:opacity-50"
+                    title="Rewrite with AI (optional)"
+                    type="button"
+                  >
+                    {isPolishing ? (
+                      <Loader2 size={16} className="animate-spin" />
+                    ) : (
+                      <Sparkles size={16} />
+                    )}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Floating right-side pill (visual only, like screenshot) */}
+        <div className="fixed right-6 bottom-10 hidden md:flex flex-col items-center gap-3 bg-black/85 text-white rounded-2xl px-2 py-3 shadow-lg">
+          <div className="w-7 h-7 rounded-xl bg-white/10 flex items-center justify-center" title="Menu (demo)">
+            <div className="grid grid-cols-3 gap-1">
+              <span className="w-1 h-1 bg-white/80 rounded-full" />
+              <span className="w-1 h-1 bg-white/80 rounded-full" />
+              <span className="w-1 h-1 bg-white/80 rounded-full" />
+              <span className="w-1 h-1 bg-white/80 rounded-full" />
+              <span className="w-1 h-1 bg-white/80 rounded-full" />
+              <span className="w-1 h-1 bg-white/80 rounded-full" />
+              <span className="w-1 h-1 bg-white/80 rounded-full" />
+              <span className="w-1 h-1 bg-white/80 rounded-full" />
+              <span className="w-1 h-1 bg-white/80 rounded-full" />
+            </div>
+          </div>
+          <div className="w-7 h-7 rounded-xl bg-white/10 flex items-center justify-center" title="Tools (demo)">
+            ✦
+          </div>
+          <div className="w-7 h-7 rounded-xl bg-white/10 flex items-center justify-center" title="Dock (demo)">
+            ▥
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ===================== Small UI helpers ===================== */
+
+const ToolIcon = ({ active, onClick, title, children }) => (
+  <button
+    onClick={onClick}
+    title={title}
+    type="button"
+    className={`w-10 h-10 rounded-xl flex items-center justify-center border transition ${
+      active
+        ? "bg-[#EAF2FF] text-[#2563EB] border-[#BFDBFE]"
+        : "bg-white text-slate-600 border-transparent hover:bg-slate-50 hover:border-slate-200"
+    }`}
+  >
+    {children}
+  </button>
+);
+
+const IconButton = ({ title, onClick, children, danger = false }) => (
+  <button
+    type="button"
+    title={title}
+    onClick={onClick}
+    className={`w-10 h-10 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 flex items-center justify-center ${
+      danger ? "text-red-500 hover:bg-red-50" : "text-slate-700"
+    }`}
+  >
+    {children}
+  </button>
+);
+
+const IconPillButton = ({ title, children }) => (
+  <button
+    type="button"
+    title={title}
+    className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/15 flex items-center justify-center"
+  >
+    {children}
+  </button>
+);
+
+export default App;
