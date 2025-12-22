@@ -1232,17 +1232,17 @@ const App = () => {
                   
                 {/* AI Polish Button */}
                 <button
-                   onMouseDown={(e) => {
-                     e.preventDefault(); // Prevent blur
-                     e.stopPropagation();
-                     handlePolishText();
-                   }}
-                   disabled={isPolishing || !textInput.text}
-                   className="bg-indigo-600 text-white p-1.5 rounded-full shadow-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
-                   title="Rewrite with AI"
-                >
-                   {isPolishing ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
-                </button>
+                    onMouseDown={(e) => {
+                      e.preventDefault(); // Prevent blur
+                      e.stopPropagation();
+                      handlePolishText();
+                    }}
+                    disabled={isPolishing || !textInput.text}
+                    className="bg-indigo-600 text-white p-1.5 rounded-full shadow-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                    title="Rewrite with AI"
+                 >
+                    {isPolishing ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
+                 </button>
                 </div>
               )}
             </div>
