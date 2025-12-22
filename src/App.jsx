@@ -21,7 +21,9 @@ import {
   Loader2,
   Bot,
   X,
-  Copy
+  Copy,
+  Undo,
+  Redo
 } from 'lucide-react';
 
 // External libraries
@@ -75,11 +77,15 @@ const App = () => {
   const [activeTool, setActiveTool] = useState('cursor');
   const [color, setColor] = useState('#EF4444');
   const [lineWidth, setLineWidth] = useState(3);
-  const [fontSize, setFontSize] = useState(16); // New Font Size State
+  const [fontSize, setFontSize] = useState(16);
   const [isFilled, setIsFilled] = useState(false);
 
   // Annotations store: { pageNum: [ ... ] }
   const [annotations, setAnnotations] = useState({});
+
+  // History stacks
+  const [history, setHistory] = useState({}); // { pageNum: [ [anns], [anns] ] }
+  const [redoStack, setRedoStack] = useState({}); // { pageNum: [ [anns], [anns] ] }
 
   // Drawing state
   const [isDrawing, setIsDrawing] = useState(false);
@@ -87,7 +93,7 @@ const App = () => {
   const [startPoint, setStartPoint] = useState(null);
 
   // Text input overlay state
-  const [textInput, setTextInput] = useState(null); // { x, y, text } in PDF coords
+  const [textInput, setTextInput] = useState(null); 
   const textInputRef = useRef(null);
 
   // AI State
@@ -109,12 +115,65 @@ const App = () => {
   const dragAnnRef = useRef({
     active: false,
     index: -1,
-    start: { x: 0, y: 0 },   // PDF coords at drag start
-    original: null,         // deep copy of original annotation
+    start: { x: 0, y: 0 },
+    original: null, 
   });
 
   // Optional selection highlight
   const [selectedIndex, setSelectedIndex] = useState(-1);
+
+  // --------- History Helpers ----------
+  const addToHistory = () => {
+    const currentAnns = annotations[pageNum] || [];
+    const snapshot = JSON.parse(JSON.stringify(currentAnns));
+    
+    setHistory(prev => ({
+      ...prev,
+      [pageNum]: [...(prev[pageNum] || []), snapshot]
+    }));
+    // Clear redo stack on new action
+    setRedoStack(prev => ({ ...prev, [pageNum]: [] }));
+  };
+
+  const undo = () => {
+    const pageHistory = history[pageNum] || [];
+    if (pageHistory.length === 0) return;
+
+    const previousState = pageHistory[pageHistory.length - 1];
+    const newHistory = pageHistory.slice(0, -1);
+
+    const currentAnns = annotations[pageNum] || [];
+
+    // Push current to redo
+    setRedoStack(prev => ({
+      ...prev,
+      [pageNum]: [...(prev[pageNum] || []), currentAnns]
+    }));
+
+    setHistory(prev => ({ ...prev, [pageNum]: newHistory }));
+    setAnnotations(prev => ({ ...prev, [pageNum]: previousState }));
+    setSelectedIndex(-1);
+  };
+
+  const redo = () => {
+    const pageRedo = redoStack[pageNum] || [];
+    if (pageRedo.length === 0) return;
+
+    const nextState = pageRedo[pageRedo.length - 1];
+    const newRedo = pageRedo.slice(0, -1);
+
+    const currentAnns = annotations[pageNum] || [];
+
+    // Push current to history
+    setHistory(prev => ({
+      ...prev,
+      [pageNum]: [...(prev[pageNum] || []), currentAnns]
+    }));
+
+    setRedoStack(prev => ({ ...prev, [pageNum]: newRedo }));
+    setAnnotations(prev => ({ ...prev, [pageNum]: nextState }));
+    setSelectedIndex(-1);
+  };
 
   // --------- Helpers: deep copy + translate annotation ----------
   const deepCopyAnn = (ann) => JSON.parse(JSON.stringify(ann));
@@ -179,7 +238,7 @@ const App = () => {
 
   const hitTestPage = (ptPdf) => {
     const pageAnns = annotations[pageNum] || [];
-    const tol = 10 / scale; // ~10px tolerance converted to PDF units
+    const tol = 10 / scale; 
     for (let i = pageAnns.length - 1; i >= 0; i--) {
       const bb = annBBoxPdf(pageAnns[i]);
       if (
@@ -242,6 +301,8 @@ const App = () => {
         setPdfDoc(pdf);
         setPageNum(1);
         setAnnotations({});
+        setHistory({});
+        setRedoStack({});
         setTextInput(null);
         setSelectedIndex(-1);
       } catch (error) {
@@ -263,17 +324,16 @@ const App = () => {
     drawAnnotations();
   }, [annotations, pageNum, scale, currentPath, startPoint, isFilled, isDrawing, selectedIndex, fontSize]);
 
-  // Force focus on text input when it opens
+  // Force focus on text input
   useEffect(() => {
     if (textInput && textInputRef.current) {
-        // Short timeout ensures the element is rendered and ready
         setTimeout(() => {
              textInputRef.current?.focus();
         }, 10);
     }
   }, [textInput]);
 
-  // Wheel zoom (non-passive)
+  // Wheel zoom
   useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
@@ -297,8 +357,7 @@ const App = () => {
     return () => container.removeEventListener('wheel', handleWheel);
   }, []);
 
-  // GLOBAL Panning Listeners (Smoother than pointer capture)
-  // FIXED: Changed to 'pointermove'/'pointerup' to ensure compatibility when preventing default on pointerdown
+  // Global Pointer Events for Panning
   useEffect(() => {
     const handleGlobalPointerMove = (e) => {
       if (isPanning.current && scrollContainerRef.current) {
@@ -384,17 +443,11 @@ const App = () => {
       (e.button === 0 && activeTool === 'cursor'); // left when cursor
 
     if (!isPanButton) return;
-
-    // Don't pan if we are hovering over an annotation (let hit test handle it)
-    // But since hit test is on canvas, and this is container, we check targets
-    // We rely on canvas stopping prop if it hits an object
-    
     e.preventDefault();
 
     const el = scrollContainerRef.current;
     if (!el) return;
 
-    // IMPORTANT: Capture the pointer so we get move/up events even outside window
     try {
       el.setPointerCapture(e.pointerId);
     } catch (err) {
@@ -442,7 +495,6 @@ const App = () => {
     }
   };
 
-  // --- Coordinates ---
   const getPdfCoordinates = (e) => {
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
@@ -476,13 +528,15 @@ const App = () => {
 
     const t = (textInput.text || '').trim();
     if (t) {
+      addToHistory(); // Save state before adding text
+      
       const newAnn = {
         type: 'text',
         x: textInput.x,
         y: textInput.y,
         text: textInput.text,
         color,
-        size: fontSize // Use current font size
+        size: fontSize 
       };
 
       setAnnotations(prev => ({
@@ -496,7 +550,6 @@ const App = () => {
     }
   };
 
-  // Separate handler for blur that checks the ignore flag
   const handleInputBlur = () => {
     finalizeText(true);
   };
@@ -532,27 +585,25 @@ const App = () => {
     ctx.stroke();
   };
 
-  // --- Canvas interactions: cursor move/select + drawing ---
+  // --- Canvas interactions ---
   const handleCanvasPointerDown = (e) => {
-    // prevent browser gestures
     if (e.button === 2) {
       e.preventDefault();
-      // allow container to start pan; do not stopPropagation here unless on object
     }
 
-    // Only act on primary/left button for editing, but right button should still be able to pan
     if (e.button !== 0) return;
 
-    // Cursor tool: try select/move annotation; if none hit, let container pan
+    // Cursor tool: try select/move
     if (activeTool === 'cursor') {
       const pt = getPdfCoordinates(e);
       const idx = hitTestPage(pt);
       setSelectedIndex(idx);
 
       if (idx !== -1) {
-        // Stop pan bubbling when we drag an object
         e.preventDefault();
         e.stopPropagation();
+
+        addToHistory(); // Save state before moving
 
         dragAnnRef.current.active = true;
         dragAnnRef.current.index = idx;
@@ -561,7 +612,6 @@ const App = () => {
         const pageAnns = annotations[pageNum] || [];
         dragAnnRef.current.original = deepCopyAnn(pageAnns[idx]);
 
-        // capture pointer on canvas so drag remains smooth
         try { canvasRef.current?.setPointerCapture(e.pointerId); } catch {}
       }
       return;
@@ -570,19 +620,15 @@ const App = () => {
     const coords = getPdfCoordinates(e);
 
     if (activeTool === 'text') {
-      // Prevent browser default (blur) to keep control manually
       e.preventDefault();
-      
-      // If we are already typing, save current text but DON'T close the state
-      // This effectively "moves" the active box to the new location
       if (textInput) {
-        finalizeText(false); // false = don't set to null
+        finalizeText(false); 
       }
-      // Move to new location and clear text
       setTextInput({ x: coords.x, y: coords.y, text: '' });
       return;
     }
 
+    addToHistory(); // Save state before drawing
     setIsDrawing(true);
     setStartPoint(coords);
 
@@ -594,7 +640,7 @@ const App = () => {
   };
 
   const handleCanvasPointerMove = (e) => {
-    // dragging an annotation (cursor tool)
+    // dragging annotation
     if (dragAnnRef.current.active) {
       e.preventDefault();
       e.stopPropagation();
@@ -673,6 +719,9 @@ const App = () => {
         [pageNum]: [...(prev[pageNum] || []), newAnn]
       }));
       setSelectedIndex(-1);
+    } else {
+        // If drawing resulted in nothing (e.g. tiny drag), we should probably revert history to avoid empty states
+        // But for simplicity we just leave the history snapshot as is.
     }
 
     setIsDrawing(false);
@@ -795,21 +844,20 @@ const App = () => {
     const original = pageAnns[selectedIndex];
     if (!original) return;
 
-    // Offset the copy slightly so it's visible
+    addToHistory(); // Save before duplicating
+
     const newAnn = translateAnn(original, 20, 20); 
     
     setAnnotations(prev => ({
       ...prev,
       [pageNum]: [...(prev[pageNum] || []), newAnn]
     }));
-    // Select the new copy
     setSelectedIndex((annotations[pageNum]?.length || 0));
   };
 
-  const undoLast = () => {
-    const pageAnns = annotations[pageNum] || [];
-    if (pageAnns.length === 0) return;
-    setAnnotations(prev => ({ ...prev, [pageNum]: pageAnns.slice(0, -1) }));
+  const clearPage = () => {
+    addToHistory();
+    setAnnotations(prev => ({ ...prev, [pageNum]: [] }));
     setSelectedIndex(-1);
   };
 
@@ -1085,16 +1133,33 @@ const App = () => {
 
           <div className="h-6 w-px bg-gray-300 mx-2"></div>
 
-          <button
-            onClick={undoLast}
-            className="p-2 hover:bg-gray-100 rounded text-gray-600"
-            title="Undo last action"
-          >
-            <RotateCcw size={18} />
-          </button>
+          {/* Undo/Redo Group */}
+          <div className="flex items-center bg-gray-100 rounded-lg p-0.5 border">
+            <button
+              onClick={undo}
+              disabled={!history[pageNum]?.length}
+              className={`p-1.5 rounded transition-all ${history[pageNum]?.length 
+                ? 'hover:bg-white text-gray-700 shadow-sm' 
+                : 'text-gray-300 cursor-not-allowed'}`}
+              title="Undo"
+            >
+              <Undo size={18} />
+            </button>
+            <div className="w-px h-4 bg-gray-300 mx-1"></div>
+            <button
+              onClick={redo}
+              disabled={!redoStack[pageNum]?.length}
+              className={`p-1.5 rounded transition-all ${redoStack[pageNum]?.length 
+                ? 'hover:bg-white text-gray-700 shadow-sm' 
+                : 'text-gray-300 cursor-not-allowed'}`}
+              title="Redo"
+            >
+              <Redo size={18} />
+            </button>
+          </div>
 
           <button
-            onClick={() => { setAnnotations(prev => ({ ...prev, [pageNum]: [] })); setSelectedIndex(-1); }}
+            onClick={clearPage}
             className="p-2 hover:bg-red-50 text-red-500 rounded"
             title="Clear Page"
           >
