@@ -1,8 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
-  // REPLACE '/pdf-annotation-app/', 
+  base: '/pdf-annotation-app/', // Matches your repo name exactly
 })
