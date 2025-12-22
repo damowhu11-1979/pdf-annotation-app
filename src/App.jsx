@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import {
   Upload,
   Pen,
@@ -66,6 +66,7 @@ const callGemini = async (prompt, systemInstruction = "") => {
 const App = () => {
   const [pdfLib, setPdfLib] = useState(null);
   const [jspdfLib, setJspdfLib] = useState(null);
+
   const [pdfDoc, setPdfDoc] = useState(null);
   const [pageNum, setPageNum] = useState(1);
   const [scale, setScale] = useState(1.5);
@@ -101,21 +102,30 @@ const App = () => {
   const renderTaskRef = useRef(null);
   const renderRequestRef = useRef(0);
 
-  // Panning
+  // If user selects a file before pdf.js finishes loading, we queue it
+  const pendingFileRef = useRef(null);
+  const [pdfEngineReady, setPdfEngineReady] = useState(false);
+
+  // Panning (robust with global listeners)
   const isPanning = useRef(false);
   const [isPanningState, setIsPanningState] = useState(false);
   const startPan = useRef({ x: 0, y: 0, sl: 0, st: 0 });
+  const panPointerIdRef = useRef(null);
 
   // Spacebar pan (reliable across browsers)
   const spaceDownRef = useRef(false);
   useEffect(() => {
     const down = (e) => {
-      if (e.code === "Space") spaceDownRef.current = true;
+      if (e.code === "Space") {
+        spaceDownRef.current = true;
+        // Prevent page scrolling on Space
+        if (document.activeElement === document.body) e.preventDefault();
+      }
     };
     const up = (e) => {
       if (e.code === "Space") spaceDownRef.current = false;
     };
-    window.addEventListener("keydown", down);
+    window.addEventListener("keydown", down, { passive: false });
     window.addEventListener("keyup", up);
     return () => {
       window.removeEventListener("keydown", down);
@@ -225,17 +235,24 @@ const App = () => {
           s1.onload = () => {
             window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
             setPdfLib(window.pdfjsLib);
+            setPdfEngineReady(true);
+          };
+          s1.onerror = () => {
+            console.error("Failed to load pdf.js");
+            setPdfEngineReady(false);
           };
           document.head.appendChild(s1);
         } else {
           window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
           setPdfLib(window.pdfjsLib);
+          setPdfEngineReady(true);
         }
 
         if (!window.jspdf) {
           const s2 = document.createElement("script");
           s2.src = JSPDF_URL;
           s2.onload = () => setJspdfLib(window.jspdf);
+          s2.onerror = () => console.error("Failed to load jspdf");
           document.head.appendChild(s2);
         } else {
           setJspdfLib(window.jspdf);
@@ -247,32 +264,58 @@ const App = () => {
     loadLibs();
   }, []);
 
-  // Handle File Upload
-  const handleFileUpload = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file || !pdfLib) return;
+  // If a file was chosen before pdf.js was ready, process it when ready
+  useEffect(() => {
+    if (pdfLib && pendingFileRef.current) {
+      const f = pendingFileRef.current;
+      pendingFileRef.current = null;
+      // simulate a "change" event workflow
+      processFile(f);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pdfLib]);
 
-    setFileName(file.name);
-    const reader = new FileReader();
-    reader.onload = async function (ev) {
-      const typedarray = new Uint8Array(ev.target.result);
+  const processFile = useCallback(
+    async (file) => {
+      if (!file || !pdfLib) return;
+
+      setFileName(file.name);
       try {
+        const arrayBuffer = await file.arrayBuffer();
+        const typedarray = new Uint8Array(arrayBuffer);
+
         const loadingTask = pdfLib.getDocument(typedarray);
         const pdf = await loadingTask.promise;
+
         setPdfDoc(pdf);
         setPageNum(1);
         setAnnotations({});
         setTextInput(null);
         setSelectedIndex(-1);
-
-        // Reset input value so selecting the same file again triggers change
-        if (fileInputRef.current) fileInputRef.current.value = "";
       } catch (error) {
         console.error("Error loading PDF:", error);
         alert("Error parsing PDF. Please try another file.");
       }
-    };
-    reader.readAsArrayBuffer(file);
+    },
+    [pdfLib]
+  );
+
+  // Handle File Upload
+  const handleFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    // reset so selecting same file again still triggers change
+    e.target.value = "";
+    if (!file) return;
+
+    // This is the big fix for “upload does nothing”:
+    // user can pick a file before pdf.js finishes loading.
+    if (!pdfLib) {
+      pendingFileRef.current = file;
+      alert("PDF engine is still loading… please try again in 1–2 seconds.");
+      return;
+    }
+
+    await processFile(file);
   };
 
   // Render Page
@@ -377,7 +420,46 @@ const App = () => {
     }
   };
 
-  // --- PAN: container pointer handlers ---
+  // --- PAN: start on container, move/up handled globally (fixes “pan doesn’t work” reliably) ---
+  useEffect(() => {
+    const onMove = (e) => {
+      if (!isPanning.current) return;
+      if (panPointerIdRef.current != null && e.pointerId !== panPointerIdRef.current)
+        return;
+
+      e.preventDefault();
+      const el = scrollContainerRef.current;
+      if (!el) return;
+
+      const dx = e.clientX - startPan.current.x;
+      const dy = e.clientY - startPan.current.y;
+
+      el.scrollLeft = startPan.current.sl - dx;
+      el.scrollTop = startPan.current.st - dy;
+    };
+
+    const end = (e) => {
+      if (!isPanning.current) return;
+      if (panPointerIdRef.current != null && e.pointerId !== panPointerIdRef.current)
+        return;
+
+      isPanning.current = false;
+      panPointerIdRef.current = null;
+      setIsPanningState(false);
+      document.body.style.cursor = "default";
+    };
+
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+    };
+  }, []);
+
   const handleContainerPointerDown = (e) => {
     // Allow pan with:
     // - middle click
@@ -390,17 +472,13 @@ const App = () => {
 
     if (!isPanButton) return;
 
-    // If cursor tool and click is on an object, canvas will stopPropagation (so pan won't start).
     e.preventDefault();
 
     const el = scrollContainerRef.current;
     if (!el) return;
 
-    try {
-      el.setPointerCapture(e.pointerId);
-    } catch {}
-
     isPanning.current = true;
+    panPointerIdRef.current = e.pointerId;
     setIsPanningState(true);
     document.body.style.cursor = "grabbing";
 
@@ -410,35 +488,6 @@ const App = () => {
       sl: el.scrollLeft,
       st: el.scrollTop,
     };
-  };
-
-  const handleContainerPointerMove = (e) => {
-    if (!isPanning.current) return;
-    e.preventDefault();
-
-    const el = scrollContainerRef.current;
-    if (!el) return;
-
-    const dx = e.clientX - startPan.current.x;
-    const dy = e.clientY - startPan.current.y;
-
-    el.scrollLeft = startPan.current.sl - dx;
-    el.scrollTop = startPan.current.st - dy;
-  };
-
-  const handleContainerPointerUp = (e) => {
-    if (!isPanning.current) return;
-
-    const el = scrollContainerRef.current;
-    if (el) {
-      try {
-        el.releasePointerCapture(e.pointerId);
-      } catch {}
-    }
-
-    isPanning.current = false;
-    setIsPanningState(false);
-    document.body.style.cursor = "default";
   };
 
   // --- Coordinates ---
@@ -524,9 +573,8 @@ const App = () => {
 
   // --- Canvas: pointer handlers (select/move + drawing) ---
   const handleCanvasPointerDown = (e) => {
-    // Always stop context menu
+    // right click should pan (container); do not stopPropagation
     if (e.button === 2) {
-      // right click should pan (container), so DO NOT stopPropagation here
       e.preventDefault();
       return;
     }
@@ -952,20 +1000,31 @@ const App = () => {
     doc.save(`edited_${fileName}`);
   };
 
+  const uploadDisabled = !pdfEngineReady;
+
   return (
     <div className="flex flex-col h-screen bg-gray-100 font-sans text-gray-800">
       {/* Header / Toolbar */}
       <div className="bg-white border-b shadow-sm p-4 flex flex-wrap items-center justify-between gap-4 z-10">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2 bg-gray-50 p-1 rounded-lg border">
-            {/* Label-based upload: works reliably on GitHub Pages */}
+            {/* Label-based upload */}
             <label
               htmlFor="pdf-upload"
-              className="p-2 hover:bg-gray-200 rounded text-gray-700 flex items-center gap-2 text-sm font-medium cursor-pointer"
-              title="Upload PDF"
+              className={`p-2 rounded flex items-center gap-2 text-sm font-medium ${
+                uploadDisabled
+                  ? "text-gray-400 cursor-not-allowed"
+                  : "text-gray-700 hover:bg-gray-200 cursor-pointer"
+              }`}
+              title={uploadDisabled ? "Loading PDF engine…" : "Upload PDF"}
+              onClick={(e) => {
+                if (uploadDisabled) e.preventDefault();
+              }}
             >
               <Upload size={18} />
-              <span className="hidden sm:inline">Upload</span>
+              <span className="hidden sm:inline">
+                {uploadDisabled ? "Loading…" : "Upload"}
+              </span>
             </label>
 
             <input
@@ -975,6 +1034,7 @@ const App = () => {
               accept=".pdf"
               className="hidden"
               onChange={handleFileUpload}
+              disabled={uploadDisabled}
             />
           </div>
 
@@ -1065,9 +1125,7 @@ const App = () => {
                   <>
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] text-gray-500">Size</span>
-                      <span className="text-[10px] text-gray-500">
-                        {fontSize}px
-                      </span>
+                      <span className="text-[10px] text-gray-500">{fontSize}px</span>
                     </div>
                     <input
                       type="range"
@@ -1143,10 +1201,6 @@ const App = () => {
         className="flex-1 overflow-auto bg-gray-200 relative cursor-default"
         style={{ userSelect: "none", touchAction: "none" }}
         onPointerDown={handleContainerPointerDown}
-        onPointerMove={handleContainerPointerMove}
-        onPointerUp={handleContainerPointerUp}
-        onPointerCancel={handleContainerPointerUp}
-        onPointerLeave={handleContainerPointerUp}
         onContextMenu={(e) => e.preventDefault()}
       >
         {!pdfDoc ? (
@@ -1156,15 +1210,27 @@ const App = () => {
               <h3 className="text-xl font-semibold text-gray-700 mb-2">
                 Upload a Document
               </h3>
-              <p className="mb-6">Select a PDF file to start annotating.</p>
+              <p className="mb-6">
+                Select a PDF file to start annotating.
+              </p>
 
-              {/* Label-based upload in the middle (reliable) */}
               <label
                 htmlFor="pdf-upload"
-                className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition cursor-pointer inline-block"
+                className={`px-6 py-2 rounded-lg transition inline-block ${
+                  uploadDisabled
+                    ? "bg-gray-200 text-gray-400 cursor-not-allowed"
+                    : "bg-blue-600 text-white hover:bg-blue-700 cursor-pointer"
+                }`}
+                onClick={(e) => {
+                  if (uploadDisabled) e.preventDefault();
+                }}
               >
-                Choose PDF
+                {uploadDisabled ? "Loading PDF engine…" : "Choose PDF"}
               </label>
+
+              <div className="mt-4 text-xs text-gray-500">
+                Pan tips: hold <b>Space</b> + drag, or <b>middle mouse</b>, or <b>right mouse</b>.
+              </div>
             </div>
           </div>
         ) : (
@@ -1187,6 +1253,7 @@ const App = () => {
               <canvas
                 ref={canvasRef}
                 className="absolute top-0 left-0"
+                style={{ touchAction: "none" }}
                 onPointerDown={handleCanvasPointerDown}
                 onPointerMove={handleCanvasPointerMove}
                 onPointerUp={handleCanvasPointerUp}
@@ -1255,7 +1322,9 @@ const ToolButton = ({ active, onClick, icon, label }) => (
   <button
     onClick={onClick}
     className={`p-2 rounded flex items-center justify-center transition-all ${
-      active ? "bg-blue-100 text-blue-700 shadow-inner" : "hover:bg-gray-200 text-gray-600"
+      active
+        ? "bg-blue-100 text-blue-700 shadow-inner"
+        : "hover:bg-gray-200 text-gray-600"
     }`}
     title={label}
   >
