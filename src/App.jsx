@@ -111,6 +111,10 @@ const App = () => {
   const [isPanningState, setIsPanningState] = useState(false);
   const startPan = useRef({ x: 0, y: 0, sl: 0, st: 0 });
 
+  // Panning Handlers Refs (to avoid stale closures in window listeners)
+  const onPanMove = useRef(null);
+  const onPanUp = useRef(null);
+
   // Moving annotations (cursor tool)
   const dragAnnRef = useRef({
     active: false,
@@ -357,37 +361,34 @@ const App = () => {
     return () => container.removeEventListener('wheel', handleWheel);
   }, []);
 
-  // Global Pointer Events for Panning
+  // Define Panning Handlers (Stable)
   useEffect(() => {
-    const handleGlobalPointerMove = (e) => {
-      if (isPanning.current && scrollContainerRef.current) {
-        e.preventDefault();
-        const dx = e.clientX - startPan.current.x;
-        const dy = e.clientY - startPan.current.y;
-        
-        scrollContainerRef.current.scrollLeft = startPan.current.sl - dx;
-        scrollContainerRef.current.scrollTop = startPan.current.st - dy;
-      }
+    onPanMove.current = (e) => {
+      if (!isPanning.current) return;
+      const el = scrollContainerRef.current;
+      if (!el) return;
+      e.preventDefault(); // Stop default browser panning
+      
+      const dx = e.clientX - startPan.current.x;
+      const dy = e.clientY - startPan.current.y;
+      
+      el.scrollLeft = startPan.current.sl - dx;
+      el.scrollTop = startPan.current.st - dy;
     };
 
-    const handleGlobalPointerUp = () => {
-      if (isPanning.current) {
-        isPanning.current = false;
-        setIsPanningState(false);
-        document.body.style.cursor = 'default';
-      }
+    onPanUp.current = () => {
+      isPanning.current = false;
+      setIsPanningState(false);
+      document.body.style.cursor = 'default';
+      
+      window.removeEventListener('pointermove', globalPanMove);
+      window.removeEventListener('pointerup', globalPanUp);
+      window.removeEventListener('pointercancel', globalPanUp);
     };
+  });
 
-    window.addEventListener('pointermove', handleGlobalPointerMove);
-    window.addEventListener('pointerup', handleGlobalPointerUp);
-    window.addEventListener('pointercancel', handleGlobalPointerUp);
-    
-    return () => {
-      window.removeEventListener('pointermove', handleGlobalPointerMove);
-      window.removeEventListener('pointerup', handleGlobalPointerUp);
-      window.removeEventListener('pointercancel', handleGlobalPointerUp);
-    };
-  }, []);
+  const globalPanMove = (e) => onPanMove.current && onPanMove.current(e);
+  const globalPanUp = (e) => onPanUp.current && onPanUp.current(e);
 
   const renderPage = async (num) => {
     if (!pdfDoc) return;
@@ -435,28 +436,23 @@ const App = () => {
     }
   };
 
-  // --- Pan Logic (Pointer Capture) ---
+  // --- Pan Logic (Start) ---
   const handleContainerPointerDown = (e) => {
+    // Only pan if Right Click, Middle Click, or Left Click in Cursor Mode
     const isPanButton =
       e.button === 2 ||                // right
       e.button === 1 ||                // middle
       (e.button === 0 && activeTool === 'cursor'); // left when cursor
 
     if (!isPanButton) return;
-    e.preventDefault();
 
-    const el = scrollContainerRef.current;
-    if (!el) return;
-
-    try {
-      el.setPointerCapture(e.pointerId);
-    } catch (err) {
-      console.warn("Failed to capture pointer", err);
-    }
-
+    e.preventDefault(); 
     isPanning.current = true;
     setIsPanningState(true);
     document.body.style.cursor = 'grabbing';
+
+    const el = scrollContainerRef.current;
+    if (!el) return;
 
     startPan.current = {
       x: e.clientX,
@@ -464,35 +460,11 @@ const App = () => {
       sl: el.scrollLeft,
       st: el.scrollTop
     };
-  };
 
-  const handleContainerPointerMove = (e) => {
-    if (!isPanning.current) return;
-    
-    e.preventDefault();
-    const el = scrollContainerRef.current;
-    if (!el) return;
-
-    const dx = e.clientX - startPan.current.x;
-    const dy = e.clientY - startPan.current.y;
-    
-    el.scrollLeft = startPan.current.sl - dx;
-    el.scrollTop = startPan.current.st - dy;
-  };
-
-  const handleContainerPointerUp = (e) => {
-    if (isPanning.current) {
-      const el = scrollContainerRef.current;
-      if (el) {
-        try {
-          el.releasePointerCapture(e.pointerId);
-        } catch (err) {}
-      }
-
-      isPanning.current = false;
-      setIsPanningState(false);
-      document.body.style.cursor = 'default';
-    }
+    // Attach global window listeners for robustness
+    window.addEventListener('pointermove', globalPanMove);
+    window.addEventListener('pointerup', globalPanUp);
+    window.addEventListener('pointercancel', globalPanUp);
   };
 
   const getPdfCoordinates = (e) => {
@@ -980,7 +952,7 @@ const App = () => {
   };
 
   return (
-    <div className="flex flex-col h-screen bg-gray-100 font-sans text-gray-800">
+    <div className="flex flex-col h-screen bg-gray-100 font-sans text-gray-800 overflow-hidden">
       {/* Header / Toolbar */}
       <div className="bg-white border-b shadow-sm p-4 flex flex-wrap items-center justify-between gap-4 z-10">
         <div className="flex items-center gap-4">
@@ -1188,10 +1160,6 @@ const App = () => {
         className="flex-1 overflow-auto bg-gray-200 relative cursor-default"
         style={{ userSelect: 'none', touchAction: 'none' }} // Prevent browser touch scroll to allow pan
         onPointerDown={handleContainerPointerDown}
-        onPointerMove={handleContainerPointerMove}
-        onPointerUp={handleContainerPointerUp}
-        onPointerCancel={handleContainerPointerUp}
-        onPointerLeave={handleContainerPointerUp}
         onContextMenu={(e) => e.preventDefault()}
       >
         {!pdfDoc ? (
