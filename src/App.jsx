@@ -915,8 +915,8 @@ const App = () => {
   return (
     <div className="flex flex-col h-screen bg-gray-100 font-sans text-gray-800">
       {/* Header / Toolbar */}
-      <div className="bg-white border-b shadow-sm p-4 flex flex-wrap items-center justify-between gap-3 z-10 shrink-0">
-        <div className="flex items-center gap-3 overflow-x-auto no-scrollbar max-w-[60vw] md:max-w-none">
+      <div className="bg-white border-b shadow-sm p-4 flex flex-wrap items-center justify-between gap-4 z-10 shrink-0">
+        <div className="flex items-center gap-4">
           {/* File Upload */}
           <div className="flex items-center gap-2 bg-gray-50 p-1 rounded-lg border shrink-0">
             <label
@@ -943,10 +943,10 @@ const App = () => {
             />
           </div>
 
-          <div className="h-6 w-px bg-gray-300 mx-1 shrink-0"></div>
+          <div className="h-6 w-px bg-gray-300 mx-2 shrink-0"></div>
 
           {/* Drawing Tools */}
-          <div className="flex items-center gap-1 bg-gray-50 p-1 rounded-lg border shrink-0">
+          <div className="flex items-center gap-1 bg-gray-50 p-1 rounded-lg border overflow-x-auto max-w-[40vw] sm:max-w-none no-scrollbar shrink-0">
             <ToolButton
               active={activeTool === "cursor"}
               onClick={() => setActiveTool("cursor")}
@@ -998,33 +998,66 @@ const App = () => {
             />
           </div>
 
-          <div className="h-6 w-px bg-gray-300 mx-1 shrink-0"></div>
+          <div className="h-6 w-px bg-gray-300 mx-2 shrink-0"></div>
 
-          {/* Properties */}
+          {/* Properties (Restored Original Layout) */}
           {activeTool !== "eraser" && (
-            <div className="flex items-center gap-3 shrink-0 animate-in fade-in zoom-in duration-200">
-              <input
-                type="color"
-                value={color}
-                onChange={(e) => setColor(e.target.value)}
-                className="w-8 h-8 rounded cursor-pointer border-0 p-0 shadow-sm"
-              />
+            <div className="flex items-center gap-3 shrink-0">
+              <div className="flex flex-col items-center">
+                <input
+                  type="color"
+                  value={color}
+                  onChange={(e) => setColor(e.target.value)}
+                  className="w-8 h-8 rounded cursor-pointer border-0 p-0 shadow-sm"
+                  title="Color"
+                />
+              </div>
+
               <button
                 onClick={() => setIsFilled(!isFilled)}
-                className={`p-2 rounded hover:bg-gray-200 ${isFilled ? "bg-blue-100 text-blue-600" : "text-gray-500"}`}
-                title="Toggle Fill"
+                className={`p-2 rounded flex items-center justify-center transition-all ${
+                  isFilled
+                    ? "bg-blue-600 text-white shadow-md"
+                    : "bg-gray-100 text-gray-400 hover:bg-gray-200"
+                }`}
+                title="Fill Shapes"
               >
                 <PaintBucket size={18} />
               </button>
-              <div className="flex flex-col w-20">
-                 <input
-                  type="range"
-                  min={activeTool === 'text' ? "8" : "1"}
-                  max={activeTool === 'text' ? "72" : "20"}
-                  value={activeTool === 'text' ? fontSize : lineWidth}
-                  onChange={(e) => activeTool === 'text' ? setFontSize(parseInt(e.target.value)) : setLineWidth(parseInt(e.target.value))}
-                  className="h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                />
+
+              <div className="flex flex-col w-24">
+                {activeTool === "text" ? (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] text-gray-500">Size</span>
+                      <span className="text-[10px] text-gray-500">{fontSize}px</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="8"
+                      max="72"
+                      value={fontSize}
+                      onChange={(e) => setFontSize(parseInt(e.target.value))}
+                      className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                      title="Font Size"
+                    />
+                  </>
+                ) : (
+                  <>
+                    <input
+                      type="range"
+                      min="1"
+                      max="10"
+                      value={lineWidth}
+                      onChange={(e) => setLineWidth(parseInt(e.target.value))}
+                      className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                      title="Thickness"
+                    />
+                    <span className="text-[10px] text-gray-500 text-center">
+                      {lineWidth}px
+                    </span>
+                  </>
+                )}
               </div>
             </div>
           )}
