@@ -914,6 +914,12 @@ const App = () => {
 
   return (
     <div className="flex flex-col h-screen bg-gray-100 font-sans text-gray-800">
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      `}</style>
       {/* Header / Toolbar */}
       <div className="bg-white border-b shadow-sm p-4 flex flex-wrap items-center justify-between gap-4 z-10 shrink-0">
         <div className="flex items-center gap-4">
