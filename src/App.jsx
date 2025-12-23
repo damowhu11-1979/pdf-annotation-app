@@ -915,7 +915,7 @@ const App = () => {
   return (
     <div className="flex flex-col h-screen bg-gray-100 font-sans text-gray-800">
       {/* Header / Toolbar */}
-      <div className="bg-white border-b shadow-sm p-3 flex flex-wrap items-center justify-between gap-3 z-10 shrink-0">
+      <div className="bg-white border-b shadow-sm p-4 flex flex-wrap items-center justify-between gap-3 z-10 shrink-0">
         <div className="flex items-center gap-3 overflow-x-auto no-scrollbar max-w-[60vw] md:max-w-none">
           {/* File Upload */}
           <div className="flex items-center gap-2 bg-gray-50 p-1 rounded-lg border shrink-0">
@@ -1001,7 +1001,7 @@ const App = () => {
           <div className="h-6 w-px bg-gray-300 mx-1 shrink-0"></div>
 
           {/* Properties */}
-          {activeTool !== "eraser" && activeTool !== "cursor" && (
+          {activeTool !== "eraser" && (
             <div className="flex items-center gap-3 shrink-0 animate-in fade-in zoom-in duration-200">
               <input
                 type="color"
