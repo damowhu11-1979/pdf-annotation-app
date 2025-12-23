@@ -1184,6 +1184,12 @@ const App = () => {
         className="flex-1 overflow-auto bg-gray-200 relative cursor-default"
         style={{ touchAction: "none" }}
         onPointerDown={handleContainerPointerDown}
+        onPointerMove={(e) => {
+          if (dragAnnRef.current.active) handleCanvasPointerMove(e);
+        }}
+        onPointerUp={(e) => {
+          if (dragAnnRef.current.active) handleCanvasPointerUp(e);
+        }}
         onContextMenu={(e) => e.preventDefault()}
       >
         {!pdfDoc ? (
