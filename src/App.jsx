@@ -1,35 +1,26 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PDF Annotator</title>
-  
+
   <!-- React & ReactDOM -->
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  
+
   <!-- Babel Standalone for JSX -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  
+
   <!-- Lucide Icons -->
   <script src="https://unpkg.com/lucide@latest"></script>
-  
+
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
-    
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-    
-    body { 
-      font-family: 'Inter', sans-serif;
-      margin: 0;
-      padding: 0;
-    }
-    
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', sans-serif; margin: 0; padding: 0; }
+
     /* Utility classes - Tailwind-style */
     .flex { display: flex; }
     .flex-col { flex-direction: column; }
@@ -41,7 +32,7 @@
     .gap-2 { gap: 0.5rem; }
     .gap-3 { gap: 0.75rem; }
     .gap-4 { gap: 1rem; }
-    
+
     .h-screen { height: 100vh; }
     .h-full { height: 100%; }
     .h-6 { height: 1.5rem; }
@@ -53,14 +44,14 @@
     .w-24 { width: 6rem; }
     .w-max { width: max-content; }
     .max-w-md { max-width: 28rem; }
-    .min-w-\\[3rem\\] { min-width: 3rem; }
-    .min-w-\\[200px\\] { min-width: 200px; }
-    
+    .min-w-\[3rem\] { min-width: 3rem; }
+    .min-w-\[200px\] { min-width: 200px; }
+
     .p-1 { padding: 0.25rem; }
     .p-2 { padding: 0.5rem; }
     .p-4 { padding: 1rem; }
     .p-8 { padding: 2rem; }
-    .p-1\\.5 { padding: 0.375rem; }
+    .p-1\.5 { padding: 0.375rem; }
     .px-2 { padding-left: 0.5rem; padding-right: 0.5rem; }
     .px-4 { padding-left: 1rem; padding-right: 1rem; }
     .px-6 { padding-left: 1.5rem; padding-right: 1.5rem; }
@@ -74,7 +65,7 @@
     .mb-6 { margin-bottom: 1.5rem; }
     .mt-4 { margin-top: 1rem; }
     .ml-auto { margin-left: auto; }
-    
+
     .bg-white { background-color: #ffffff; }
     .bg-gray-50 { background-color: #f9fafb; }
     .bg-gray-100 { background-color: #f3f4f6; }
@@ -83,7 +74,7 @@
     .bg-blue-100 { background-color: #dbeafe; }
     .bg-blue-600 { background-color: #2563eb; }
     .bg-indigo-600 { background-color: #4f46e5; }
-    
+
     .text-gray-400 { color: #9ca3af; }
     .text-gray-500 { color: #6b7280; }
     .text-gray-600 { color: #4b5563; }
@@ -94,105 +85,103 @@
     .text-blue-500 { color: #3b82f6; }
     .text-white { color: #ffffff; }
     .text-red-500 { color: #ef4444; }
-    
+
     .text-xs { font-size: 0.75rem; line-height: 1rem; }
     .text-sm { font-size: 0.875rem; line-height: 1.25rem; }
     .text-xl { font-size: 1.25rem; line-height: 1.75rem; }
-    .text-\\[10px\\] { font-size: 10px; }
-    
+    .text-\[10px\] { font-size: 10px; }
+
     .font-medium { font-weight: 500; }
     .font-semibold { font-weight: 600; }
     .font-sans { font-family: 'Inter', sans-serif; }
-    
+
     .rounded { border-radius: 0.25rem; }
     .rounded-lg { border-radius: 0.5rem; }
     .rounded-2xl { border-radius: 1rem; }
     .rounded-full { border-radius: 9999px; }
-    
+
     .border { border: 1px solid #e5e7eb; }
     .border-0 { border: 0; }
     .border-b { border-bottom: 1px solid #e5e7eb; }
     .border-blue-500 { border-color: #3b82f6; }
-    
+
     .shadow-sm { box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05); }
-    .shadow-lg { box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1); }
     .shadow-md { box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1); }
+    .shadow-lg { box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1); }
     .shadow-xl { box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1); }
     .shadow-inner { box-shadow: inset 0 2px 4px 0 rgb(0 0 0 / 0.05); }
-    
+
     .ring-1 { box-shadow: 0 0 0 1px rgb(0 0 0 / 0.05); }
-    .ring-black\\/5 { --tw-ring-color: rgb(0 0 0 / 0.05); }
-    
+    .ring-black\/5 { --tw-ring-color: rgb(0 0 0 / 0.05); }
+
     .outline-none { outline: 2px solid transparent; outline-offset: 2px; }
-    
+
     .cursor-pointer { cursor: pointer; }
     .cursor-not-allowed { cursor: not-allowed; }
     .cursor-default { cursor: default; }
     .cursor-grabbing { cursor: grabbing; }
     .cursor-crosshair { cursor: crosshair; }
-    
+
     .overflow-auto { overflow: auto; }
     .overflow-x-auto { overflow-x: auto; }
-    
+
     .hidden { display: none; }
     .block { display: block; }
     .inline-block { display: inline-block; }
-    
+
     .relative { position: relative; }
     .absolute { position: absolute; }
     .top-0 { top: 0; }
     .left-0 { left: 0; }
-    
+
     .z-10 { z-index: 10; }
     .z-50 { z-index: 50; }
-    
+
     .shrink-0 { flex-shrink: 0; }
     .flex-1 { flex: 1 1 0%; }
-    
+
     .text-center { text-align: center; }
-    
+
     .transition { transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, backdrop-filter; transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); transition-duration: 150ms; }
     .transition-all { transition-property: all; transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); transition-duration: 150ms; }
     .transition-colors { transition-property: color, background-color, border-color, text-decoration-color, fill, stroke; transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); transition-duration: 150ms; }
-    
+
     .appearance-none { appearance: none; }
-    
+
     .placeholder-blue-300::placeholder { color: #93c5fd; }
-    
+
     .opacity-30 { opacity: 0.3; }
     .opacity-50 { opacity: 0.5; }
-    
+
     .origin-top-left { transform-origin: top left; }
-    
+
     /* Hover states */
-    .hover\\:bg-gray-100:hover { background-color: #f3f4f6; }
-    .hover\\:bg-gray-200:hover { background-color: #e5e7eb; }
-    .hover\\:bg-blue-700:hover { background-color: #1d4ed8; }
-    .hover\\:bg-indigo-700:hover { background-color: #4338ca; }
-    .hover\\:bg-red-50:hover { background-color: #fef2f2; }
-    
+    .hover\:bg-gray-100:hover { background-color: #f3f4f6; }
+    .hover\:bg-gray-200:hover { background-color: #e5e7eb; }
+    .hover\:bg-blue-700:hover { background-color: #1d4ed8; }
+    .hover\:bg-indigo-700:hover { background-color: #4338ca; }
+    .hover\:bg-red-50:hover { background-color: #fef2f2; }
+
     /* Disabled states */
     button:disabled { opacity: 0.5; cursor: not-allowed; }
-    .disabled\\:opacity-30:disabled { opacity: 0.3; }
-    .disabled\\:cursor-not-allowed:disabled { cursor: not-allowed; }
-    
+    .disabled\:opacity-30:disabled { opacity: 0.3; }
+    .disabled\:cursor-not-allowed:disabled { cursor: not-allowed; }
+
     /* Animation */
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
+    @keyframes spin { to { transform: rotate(360deg); } }
     .animate-spin { animation: spin 1s linear infinite; }
-    
+
     /* Responsive */
     @media (min-width: 640px) {
-      .sm\\:inline { display: inline; }
-      .sm\\:block { display: block; }
-      .sm\\:max-w-none { max-width: none; }
+      .sm\:inline { display: inline; }
+      .sm\:block { display: block; }
+      .sm\:max-w-none { max-width: none; }
     }
-    
+
     /* Custom scrollbar */
     .no-scrollbar::-webkit-scrollbar { display: none; }
     .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-    
+
     /* Range input styling */
     input[type="range"] {
       -webkit-appearance: none;
@@ -218,7 +207,7 @@
       border-radius: 50%;
       border: 0;
     }
-    
+
     /* Color input styling */
     input[type="color"] {
       -webkit-appearance: none;
@@ -230,22 +219,15 @@
       border-radius: 0.25rem;
       cursor: pointer;
     }
-    input[type="color"]::-webkit-color-swatch-wrapper {
-      padding: 0;
-    }
-    input[type="color"]::-webkit-color-swatch {
-      border: 0;
-      border-radius: 0.25rem;
-    }
-    input[type="color"]::-moz-color-swatch {
-      border: 0;
-      border-radius: 0.25rem;
-    }
-    
+    input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+    input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 0.25rem; }
+    input[type="color"]::-moz-color-swatch { border: 0; border-radius: 0.25rem; }
+
     /* Max width responsive */
-    .max-w-\\[50vw\\] { max-width: 50vw; }
+    .max-w-\[50vw\] { max-width: 50vw; }
   </style>
 </head>
+
 <body>
   <div id="root"></div>
 
@@ -277,9 +259,7 @@
     // Initialize lucide icons after render
     const useLucideIcons = () => {
       useEffect(() => {
-        if (window.lucide) {
-          window.lucide.createIcons();
-        }
+        if (window.lucide) window.lucide.createIcons();
       });
     };
 
@@ -295,14 +275,12 @@
         alert("Gemini API key not configured. AI Polish feature is disabled.");
         return prompt;
       }
-      
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${apiKey}`;
+
+      const url = \`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=\${apiKey}\`;
 
       const payload = {
         contents: [{ parts: [{ text: prompt }] }],
-        systemInstruction: systemInstruction
-          ? { parts: [{ text: systemInstruction }] }
-          : undefined,
+        systemInstruction: systemInstruction ? { parts: [{ text: systemInstruction }] } : undefined,
       };
 
       let delay = 1000;
@@ -316,19 +294,31 @@
 
           if (!response.ok) {
             if (response.status === 429) throw new Error("Too Many Requests");
-            throw new Error(`API Error: ${response.status}`);
+            throw new Error(\`API Error: \${response.status}\`);
           }
 
           const data = await response.json();
-          return (
-            data.candidates?.[0]?.content?.parts?.[0]?.text || "No response generated."
-          );
+          return data.candidates?.[0]?.content?.parts?.[0]?.text || "No response generated.";
         } catch (error) {
           if (i === 4) throw error;
           await new Promise((r) => setTimeout(r, delay));
           delay *= 2;
         }
       }
+    };
+
+    const ToolButton = ({ active, onClick, icon, label }) => {
+      useLucideIcons();
+      return (
+        <button
+          onClick={onClick}
+          className={\`p-2 rounded flex items-center justify-center transition-all \${active ? "bg-blue-100 text-blue-700 shadow-inner" : "hover:bg-gray-200 text-gray-600"}\`}
+          title={label}
+          type="button"
+        >
+          {icon}
+        </button>
+      );
     };
 
     const App = () => {
@@ -412,12 +402,7 @@
         if (ann.type === "pen" || ann.type === "eraser") {
           const xs = ann.points.map((p) => p.x);
           const ys = ann.points.map((p) => p.y);
-          return {
-            minX: Math.min(...xs),
-            maxX: Math.max(...xs),
-            minY: Math.min(...ys),
-            maxY: Math.max(...ys),
-          };
+          return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
         }
         if (ann.type === "line" || ann.type === "arrow") {
           return {
@@ -515,31 +500,28 @@
         }
       }, [pdfLib]);
 
-      const processFile = useCallback(
-        async (file) => {
-          if (!file || !pdfLib) return;
+      const processFile = useCallback(async (file) => {
+        if (!file || !pdfLib) return;
 
-          setFileName(file.name);
-          try {
-            const arrayBuffer = await file.arrayBuffer();
-            const typedarray = new Uint8Array(arrayBuffer);
+        setFileName(file.name);
+        try {
+          const arrayBuffer = await file.arrayBuffer();
+          const typedarray = new Uint8Array(arrayBuffer);
 
-            const loadingTask = pdfLib.getDocument(typedarray);
-            const pdf = await loadingTask.promise;
+          const loadingTask = pdfLib.getDocument(typedarray);
+          const pdf = await loadingTask.promise;
 
-            setPdfDoc(pdf);
-            setTotalPages(pdf.numPages);
-            setPageNum(1);
-            setAnnotations({});
-            setTextInput(null);
-            setSelectedIndex(-1);
-          } catch (error) {
-            console.error("Error loading PDF:", error);
-            alert("Error parsing PDF. Please try another file.");
-          }
-        },
-        [pdfLib]
-      );
+          setPdfDoc(pdf);
+          setTotalPages(pdf.numPages);
+          setPageNum(1);
+          setAnnotations({});
+          setTextInput(null);
+          setSelectedIndex(-1);
+        } catch (error) {
+          console.error("Error loading PDF:", error);
+          alert("Error parsing PDF. Please try another file.");
+        }
+      }, [pdfLib]);
 
       const handleFileUpload = async (e) => {
         const file = e.target.files?.[0];
@@ -562,23 +544,10 @@
 
       useEffect(() => {
         drawAnnotations();
-      }, [
-        annotations,
-        pageNum,
-        scale,
-        currentPath,
-        startPoint,
-        isFilled,
-        isDrawing,
-        selectedIndex,
-        fontSize,
-        activeTool
-      ]);
+      }, [annotations, pageNum, scale, currentPath, startPoint, isFilled, isDrawing, selectedIndex, fontSize, activeTool]);
 
       useEffect(() => {
-        if (textInput && textInputRef.current) {
-          setTimeout(() => textInputRef.current?.focus(), 10);
-        }
+        if (textInput && textInputRef.current) setTimeout(() => textInputRef.current?.focus(), 10);
       }, [textInput]);
 
       useEffect(() => {
@@ -630,9 +599,7 @@
         const requestId = renderRequestRef.current;
 
         if (renderTaskRef.current) {
-          try {
-            await renderTaskRef.current.cancel();
-          } catch (_) {}
+          try { await renderTaskRef.current.cancel(); } catch (_) {}
         }
 
         try {
@@ -650,10 +617,7 @@
             drawCanvas.height = viewport.height;
             drawCanvas.width = viewport.width;
 
-            const renderContext = {
-              canvasContext: pdfCanvas.getContext("2d"),
-              viewport,
-            };
+            const renderContext = { canvasContext: pdfCanvas.getContext("2d"), viewport };
 
             const task = page.render(renderContext);
             renderTaskRef.current = task;
@@ -674,8 +638,7 @@
       useEffect(() => {
         const onMove = (e) => {
           if (!isPanning.current) return;
-          if (panPointerIdRef.current != null && e.pointerId !== panPointerIdRef.current)
-            return;
+          if (panPointerIdRef.current != null && e.pointerId !== panPointerIdRef.current) return;
 
           e.preventDefault();
           const el = scrollContainerRef.current;
@@ -690,8 +653,7 @@
 
         const end = (e) => {
           if (!isPanning.current) return;
-          if (panPointerIdRef.current != null && e.pointerId !== panPointerIdRef.current)
-            return;
+          if (panPointerIdRef.current != null && e.pointerId !== panPointerIdRef.current) return;
 
           isPanning.current = false;
           panPointerIdRef.current = null;
@@ -711,11 +673,7 @@
       }, []);
 
       const handleContainerPointerDown = (e) => {
-        const isPanButton =
-          e.button === 1 ||
-          e.button === 2 ||
-          (e.button === 0 && (activeTool === "cursor" || spaceDownRef.current));
-
+        const isPanButton = e.button === 1 || e.button === 2 || (e.button === 0 && (activeTool === "cursor" || spaceDownRef.current));
         if (!isPanButton) return;
 
         e.preventDefault();
@@ -727,12 +685,7 @@
         setIsPanningState(true);
         document.body.style.cursor = "grabbing";
 
-        startPan.current = {
-          x: e.clientX,
-          y: e.clientY,
-          sl: el.scrollLeft,
-          st: el.scrollTop,
-        };
+        startPan.current = { x: e.clientX, y: e.clientY, sl: el.scrollLeft, st: el.scrollTop };
       };
 
       const getPdfCoordinates = (e) => {
@@ -765,18 +718,8 @@
         if (!textInput) return;
         const t = (textInput.text || "").trim();
         if (t) {
-          const newAnn = {
-            type: "text",
-            x: textInput.x,
-            y: textInput.y,
-            text: textInput.text,
-            color,
-            size: fontSize,
-          };
-          setAnnotations((prev) => ({
-            ...prev,
-            [pageNum]: [...(prev[pageNum] || []), newAnn],
-          }));
+          const newAnn = { type: "text", x: textInput.x, y: textInput.y, text: textInput.text, color, size: fontSize };
+          setAnnotations((prev) => ({ ...prev, [pageNum]: [...(prev[pageNum] || []), newAnn] }));
         }
         if (shouldClose) setTextInput(null);
       };
@@ -813,10 +756,7 @@
       };
 
       const handleCanvasPointerDown = (e) => {
-        if (e.button === 2) {
-          e.preventDefault();
-          return; 
-        }
+        if (e.button === 2) { e.preventDefault(); return; }
         if (spaceDownRef.current) return;
         if (e.button !== 0) return;
 
@@ -905,10 +845,7 @@
 
         const coords = getPdfCoordinates(e);
         let newAnn = null;
-        const baseProps = {
-          color: activeTool === "eraser" ? "#ffffff" : color,
-          width: activeTool === "eraser" ? 20 : lineWidth,
-        };
+        const baseProps = { color: activeTool === "eraser" ? "#ffffff" : color, width: activeTool === "eraser" ? 20 : lineWidth };
 
         if (activeTool === "pen" || activeTool === "eraser") {
           newAnn = { ...baseProps, type: activeTool, points: currentPath };
@@ -924,10 +861,7 @@
         }
 
         if (newAnn) {
-          setAnnotations((prev) => ({
-            ...prev,
-            [pageNum]: [...(prev[pageNum] || []), newAnn],
-          }));
+          setAnnotations((prev) => ({ ...prev, [pageNum]: [...(prev[pageNum] || []), newAnn] }));
           setSelectedIndex(-1);
         }
 
@@ -1010,6 +944,7 @@
             );
             ctx.setLineDash([]);
           }
+
           ctx.restore();
         };
 
@@ -1045,13 +980,10 @@
         if (selectedIndex < 0 || selectedIndex >= pageAnns.length) return;
 
         const ann = pageAnns[selectedIndex];
-        const offset = 20 / scale; 
+        const offset = 20 / scale;
         const newAnn = translateAnn(ann, offset, offset);
-        
-        setAnnotations((prev) => ({
-          ...prev,
-          [pageNum]: [...(prev[pageNum] || []), newAnn],
-        }));
+
+        setAnnotations((prev) => ({ ...prev, [pageNum]: [...(prev[pageNum] || []), newAnn] }));
         setSelectedIndex(pageAnns.length);
       };
 
@@ -1078,30 +1010,28 @@
         doc.deletePage(1);
         const exportScale = 2.0;
 
-      const exportScale = 2.0;
+        const strokeArrowExport = (ctx, x1, y1, x2, y2, headLenPx) => {
+          ctx.beginPath();
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x2, y2);
+          ctx.stroke();
 
-const strokeArrowExport = (ctx, x1, y1, x2, y2, headLenPx) => {
-  ctx.beginPath();
-  ctx.moveTo(x1, y1);
-  ctx.lineTo(x2, y2);
-  ctx.stroke();
+          const angle = Math.atan2(y2 - y1, x2 - x1);
+          const a1 = angle - Math.PI / 7;
+          const a2 = angle + Math.PI / 7;
 
-  const angle = Math.atan2(y2 - y1, x2 - x1);
-  const a1 = angle - Math.PI / 7;
-  const a2 = angle + Math.PI / 7;
+          const hx1 = x2 - headLenPx * Math.cos(a1);
+          const hy1 = y2 - headLenPx * Math.sin(a1);
+          const hx2 = x2 - headLenPx * Math.cos(a2);
+          const hy2 = y2 - headLenPx * Math.sin(a2);
 
-  const hx1 = x2 - headLenPx * Math.cos(a1);
-  const hy1 = y2 - headLenPx * Math.sin(a1);
-  const hx2 = x2 - headLenPx * Math.cos(a2);
-  const hy2 = y2 - headLenPx * Math.sin(a2);
-
-  ctx.beginPath();
-  ctx.moveTo(x2, y2);
-  ctx.lineTo(hx1, hy1);
-  ctx.moveTo(x2, y2);
-  ctx.lineTo(hx2, hy2);
-  ctx.stroke();
-};
+          ctx.beginPath();
+          ctx.moveTo(x2, y2);
+          ctx.lineTo(hx1, hy1);
+          ctx.moveTo(x2, y2);
+          ctx.lineTo(hx2, hy2);
+          ctx.stroke();
+        };
 
         for (let i = 1; i <= totalPages; i++) {
           const page = await pdfDoc.getPage(i);
@@ -1184,15 +1114,11 @@ const strokeArrowExport = (ctx, x1, y1, x2, y2, headLenPx) => {
                 <label
                   htmlFor="pdf-upload"
                   className={`p-2 rounded flex items-center gap-2 text-sm font-medium transition-colors ${
-                    uploadDisabled
-                      ? "text-gray-400 cursor-not-allowed"
-                      : "text-gray-700 hover:bg-gray-200 cursor-pointer"
+                    uploadDisabled ? "text-gray-400 cursor-not-allowed" : "text-gray-700 hover:bg-gray-200 cursor-pointer"
                   }`}
                 >
                   <Upload size={18} />
-                  <span className="hidden sm:inline">
-                    {uploadDisabled ? "Loading…" : "Upload"}
-                  </span>
+                  <span className="hidden sm:inline">{uploadDisabled ? "Loading…" : "Upload"}</span>
                 </label>
                 <input
                   id="pdf-upload"
@@ -1208,55 +1134,15 @@ const strokeArrowExport = (ctx, x1, y1, x2, y2, headLenPx) => {
               <div className="h-6 w-px bg-gray-300 mx-2 shrink-0"></div>
 
               <div className="flex items-center gap-1 bg-gray-50 p-1 rounded-lg border overflow-x-auto max-w-[50vw] sm:max-w-none no-scrollbar shrink-0">
-                <ToolButton
-                  active={activeTool === "cursor"}
-                  onClick={() => setActiveTool("cursor")}
-                  icon={<MousePointer size={18} />}
-                  label="Select/Move"
-                />
-                <ToolButton
-                  active={activeTool === "pen"}
-                  onClick={() => setActiveTool("pen")}
-                  icon={<Pen size={18} />}
-                  label="Pen"
-                />
-                <ToolButton
-                  active={activeTool === "eraser"}
-                  onClick={() => setActiveTool("eraser")}
-                  icon={<Eraser size={18} />}
-                  label="Eraser"
-                />
+                <ToolButton active={activeTool === "cursor"} onClick={() => setActiveTool("cursor")} icon={<MousePointer size={18} />} label="Select/Move" />
+                <ToolButton active={activeTool === "pen"} onClick={() => setActiveTool("pen")} icon={<Pen size={18} />} label="Pen" />
+                <ToolButton active={activeTool === "eraser"} onClick={() => setActiveTool("eraser")} icon={<Eraser size={18} />} label="Eraser" />
                 <div className="w-px h-6 bg-gray-200 mx-1"></div>
-                <ToolButton
-                  active={activeTool === "line"}
-                  onClick={() => setActiveTool("line")}
-                  icon={<Minus size={18} />}
-                  label="Line"
-                />
-                <ToolButton
-                  active={activeTool === "arrow"}
-                  onClick={() => setActiveTool("arrow")}
-                  icon={<ArrowRight size={18} />}
-                  label="Arrow"
-                />
-                <ToolButton
-                  active={activeTool === "rect"}
-                  onClick={() => setActiveTool("rect")}
-                  icon={<Square size={18} />}
-                  label="Rectangle"
-                />
-                <ToolButton
-                  active={activeTool === "circle"}
-                  onClick={() => setActiveTool("circle")}
-                  icon={<Circle size={18} />}
-                  label="Circle"
-                />
-                <ToolButton
-                  active={activeTool === "text"}
-                  onClick={() => setActiveTool("text")}
-                  icon={<Type size={18} />}
-                  label="Text"
-                />
+                <ToolButton active={activeTool === "line"} onClick={() => setActiveTool("line")} icon={<Minus size={18} />} label="Line" />
+                <ToolButton active={activeTool === "arrow"} onClick={() => setActiveTool("arrow")} icon={<ArrowRight size={18} />} label="Arrow" />
+                <ToolButton active={activeTool === "rect"} onClick={() => setActiveTool("rect")} icon={<Square size={18} />} label="Rectangle" />
+                <ToolButton active={activeTool === "circle"} onClick={() => setActiveTool("circle")} icon={<Circle size={18} />} label="Circle" />
+                <ToolButton active={activeTool === "text"} onClick={() => setActiveTool("text")} icon={<Type size={18} />} label="Text" />
               </div>
 
               <div className="h-6 w-px bg-gray-300 mx-2 shrink-0"></div>
@@ -1274,11 +1160,10 @@ const strokeArrowExport = (ctx, x1, y1, x2, y2, headLenPx) => {
                   </div>
 
                   <button
+                    type="button"
                     onClick={() => setIsFilled(!isFilled)}
                     className={`p-2 rounded flex items-center justify-center transition-all ${
-                      isFilled
-                        ? "bg-blue-600 text-white shadow-md"
-                        : "bg-gray-100 text-gray-400 hover:bg-gray-200"
+                      isFilled ? "bg-blue-600 text-white shadow-md" : "bg-gray-100 text-gray-400 hover:bg-gray-200"
                     }`}
                     title="Fill Shapes"
                   >
@@ -1313,9 +1198,7 @@ const strokeArrowExport = (ctx, x1, y1, x2, y2, headLenPx) => {
                           className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
                           title="Thickness"
                         />
-                        <span className="text-[10px] text-gray-500 text-center">
-                          {lineWidth}px
-                        </span>
+                        <span className="text-[10px] text-gray-500 text-center">{lineWidth}px</span>
                       </>
                     )}
                   </div>
@@ -1325,49 +1208,32 @@ const strokeArrowExport = (ctx, x1, y1, x2, y2, headLenPx) => {
 
             <div className="flex items-center gap-2 shrink-0 ml-auto">
               {pdfDoc && (
-                 <div className="flex items-center gap-1 bg-gray-50 p-1 rounded-lg border">
-                    <button 
-                      onClick={() => changePage(-1)}
-                      disabled={pageNum <= 1}
-                      className="p-1 hover:bg-gray-200 rounded disabled:opacity-30"
-                    >
-                      <ChevronLeft size={18} />
-                    </button>
-                    <span className="text-sm font-medium min-w-[3rem] text-center">
-                       {pageNum} / {totalPages}
-                    </span>
-                    <button 
-                      onClick={() => changePage(1)}
-                      disabled={pageNum >= totalPages}
-                      className="p-1 hover:bg-gray-200 rounded disabled:opacity-30"
-                    >
-                      <ChevronRight size={18} />
-                    </button>
-                 </div>
+                <div className="flex items-center gap-1 bg-gray-50 p-1 rounded-lg border">
+                  <button type="button" onClick={() => changePage(-1)} disabled={pageNum <= 1} className="p-1 hover:bg-gray-200 rounded disabled:opacity-30">
+                    <ChevronLeft size={18} />
+                  </button>
+                  <span className="text-sm font-medium min-w-[3rem] text-center">{pageNum} / {totalPages}</span>
+                  <button type="button" onClick={() => changePage(1)} disabled={pageNum >= totalPages} className="p-1 hover:bg-gray-200 rounded disabled:opacity-30">
+                    <ChevronRight size={18} />
+                  </button>
+                </div>
               )}
-              
+
               {pdfDoc && <div className="h-6 w-px bg-gray-300 mx-1"></div>}
 
               <div className="flex items-center gap-1">
-                 <button
-                   onClick={() => setScale(s => Math.min(5, s + 0.1))}
-                   className="p-2 hover:bg-gray-100 rounded text-gray-600"
-                   title="Zoom In"
-                 >
-                   <ZoomIn size={18} />
-                 </button>
-                 <button
-                   onClick={() => setScale(s => Math.max(0.25, s - 0.1))}
-                   className="p-2 hover:bg-gray-100 rounded text-gray-600"
-                   title="Zoom Out"
-                 >
-                   <ZoomOut size={18} />
-                 </button>
+                <button type="button" onClick={() => setScale(s => Math.min(5, s + 0.1))} className="p-2 hover:bg-gray-100 rounded text-gray-600" title="Zoom In">
+                  <ZoomIn size={18} />
+                </button>
+                <button type="button" onClick={() => setScale(s => Math.max(0.25, s - 0.1))} className="p-2 hover:bg-gray-100 rounded text-gray-600" title="Zoom Out">
+                  <ZoomOut size={18} />
+                </button>
               </div>
 
               <div className="h-6 w-px bg-gray-300 mx-1"></div>
 
               <button
+                type="button"
                 onClick={copySelectedAnnotation}
                 disabled={selectedIndex === -1}
                 className="p-2 hover:bg-gray-100 rounded text-gray-600 disabled:opacity-30 disabled:cursor-not-allowed"
@@ -1376,19 +1242,14 @@ const strokeArrowExport = (ctx, x1, y1, x2, y2, headLenPx) => {
                 <Copy size={18} />
               </button>
 
-              <button
-                onClick={undoLast}
-                className="p-2 hover:bg-gray-100 rounded text-gray-600"
-                title="Undo last action"
-              >
+              <button type="button" onClick={undoLast} className="p-2 hover:bg-gray-100 rounded text-gray-600" title="Undo last action">
                 <RotateCcw size={18} />
               </button>
-              
+
               <button
+                type="button"
                 onClick={() => {
-                   if(confirm("Clear all annotations on this page?")) {
-                      setAnnotations(prev => ({ ...prev, [pageNum]: [] }));
-                   }
+                  if (confirm("Clear all annotations on this page?")) setAnnotations(prev => ({ ...prev, [pageNum]: [] }));
                 }}
                 className="p-2 hover:bg-red-50 text-red-500 rounded"
                 title="Clear Page"
@@ -1399,12 +1260,11 @@ const strokeArrowExport = (ctx, x1, y1, x2, y2, headLenPx) => {
               <div className="h-6 w-px bg-gray-300 mx-2"></div>
 
               <button
+                type="button"
                 onClick={exportPDF}
                 disabled={!pdfDoc}
                 className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
-                  !pdfDoc
-                    ? "bg-gray-200 text-gray-400 cursor-not-allowed"
-                    : "bg-blue-600 hover:bg-blue-700 text-white shadow-sm"
+                  !pdfDoc ? "bg-gray-200 text-gray-400 cursor-not-allowed" : "bg-blue-600 hover:bg-blue-700 text-white shadow-sm"
                 }`}
               >
                 <Save size={18} />
@@ -1424,23 +1284,15 @@ const strokeArrowExport = (ctx, x1, y1, x2, y2, headLenPx) => {
               <div className="flex flex-col items-center justify-center text-gray-400 h-full p-8">
                 <div className="bg-white p-8 rounded-2xl shadow-sm text-center max-w-md">
                   <Upload size={48} className="mx-auto mb-4 text-blue-500 opacity-50" />
-                  <h3 className="text-xl font-semibold text-gray-700 mb-2">
-                    Upload a Document
-                  </h3>
-                  <p className="mb-6">
-                    Select a PDF file to start annotating.
-                  </p>
+                  <h3 className="text-xl font-semibold text-gray-700 mb-2">Upload a Document</h3>
+                  <p className="mb-6">Select a PDF file to start annotating.</p>
 
                   <label
                     htmlFor="pdf-upload"
                     className={`px-6 py-2 rounded-lg transition inline-block ${
-                      uploadDisabled
-                        ? "bg-gray-200 text-gray-400 cursor-not-allowed"
-                        : "bg-blue-600 text-white hover:bg-blue-700 cursor-pointer"
+                      uploadDisabled ? "bg-gray-200 text-gray-400 cursor-not-allowed" : "bg-blue-600 text-white hover:bg-blue-700 cursor-pointer"
                     }`}
-                    onClick={(e) => {
-                      if (uploadDisabled) e.preventDefault();
-                    }}
+                    onClick={(e) => { if (uploadDisabled) e.preventDefault(); }}
                   >
                     {uploadDisabled ? "Loading PDF engine…" : "Choose PDF"}
                   </label>
@@ -1457,11 +1309,7 @@ const strokeArrowExport = (ctx, x1, y1, x2, y2, headLenPx) => {
                   style={{
                     width: "fit-content",
                     height: "fit-content",
-                    cursor: isPanningState
-                      ? "grabbing"
-                      : activeTool === "cursor"
-                      ? "default"
-                      : "crosshair",
+                    cursor: isPanningState ? "grabbing" : (activeTool === "cursor" ? "default" : "crosshair"),
                   }}
                 >
                   <canvas ref={pdfCanvasRef} className="bg-white block" />
@@ -1480,45 +1328,28 @@ const strokeArrowExport = (ctx, x1, y1, x2, y2, headLenPx) => {
                   {textInput && (
                     <div
                       className="absolute z-50 flex items-center gap-2"
-                      style={{
-                        left: textInput.x * scale,
-                        top: textInput.y * scale - 8,
-                      }}
+                      style={{ left: textInput.x * scale, top: textInput.y * scale - 8 }}
                     >
                       <input
                         ref={textInputRef}
                         autoFocus
                         value={textInput.text}
-                        onChange={(e) =>
-                          setTextInput({ ...textInput, text: e.target.value })
-                        }
+                        onChange={(e) => setTextInput({ ...textInput, text: e.target.value })}
                         onBlur={handleInputBlur}
                         onKeyDown={handleTextSubmit}
                         className="bg-white border border-blue-500 rounded px-2 py-1 outline-none text-blue-900 placeholder-blue-300 shadow-lg min-w-[200px]"
-                        style={{
-                          fontSize: `${fontSize * scale}px`,
-                          fontFamily: "sans-serif",
-                          color,
-                          lineHeight: 1.2,
-                        }}
+                        style={{ fontSize: `${fontSize * scale}px`, fontFamily: "sans-serif", color, lineHeight: 1.2 }}
                         placeholder="Type..."
                         onPointerDown={(e) => e.stopPropagation()}
                       />
                       <button
-                        onMouseDown={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          handlePolishText();
-                        }}
+                        type="button"
+                        onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); handlePolishText(); }}
                         disabled={isPolishing || !textInput.text}
                         className="bg-indigo-600 text-white p-1.5 rounded-full shadow-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
                         title="AI Polish"
                       >
-                        {isPolishing ? (
-                          <Loader2 size={16} className="animate-spin" />
-                        ) : (
-                          <Sparkles size={16} />
-                        )}
+                        {isPolishing ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
                       </button>
                     </div>
                   )}
@@ -1530,27 +1361,9 @@ const strokeArrowExport = (ctx, x1, y1, x2, y2, headLenPx) => {
       );
     };
 
-    const ToolButton = ({ active, onClick, icon, label }) => {
-      useLucideIcons();
-      return (
-        <button
-          onClick={onClick}
-          className={`p-2 rounded flex items-center justify-center transition-all ${
-            active
-              ? "bg-blue-100 text-blue-700 shadow-inner"
-              : "hover:bg-gray-200 text-gray-600"
-          }`}
-          title={label}
-        >
-          {icon}
-        </button>
-      );
-    };
-
     // Render the app
     const root = ReactDOM.createRoot(document.getElementById('root'));
     root.render(<App />);
   </script>
 </body>
 </html>
-export default App;
