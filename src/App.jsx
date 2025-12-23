@@ -1078,23 +1078,30 @@
         doc.deletePage(1);
         const exportScale = 2.0;
 
-        const strokeArrowExport = (ctx, x1, y1, x2, y2, headLenPx) => {
-           ctx.beginPath();
-           ctx.moveTo(x1, y1);
-           ctx.lineTo(x2, y2);
-           ctx.stroke();
-           const angle = Math.atan2(y2 - y1, x2 - x1);
-           const hx1 = x2 - headLenPx * Math.cos(angle - Math.PI / 7);
-           const hy1 = y2 - headLenPx * Math.sin(angle - Math.PI / 7);
-           const hx2 = x2 - headLenPx * Math.cos(angle + Math.PI / 7);
-           const hy2 = y2 - headLenPx * Math.sin(angle + Math.PI / 7);
-           ctx.beginPath();
-           ctx.moveTo(x2, y2);
-           ctx.lineTo(hx1, hy1);
-           ctx.moveTo(x2, y2);
-           ctx.lineTo(hx2, hy2);
-           ctx.stroke();
-        };
+      const exportScale = 2.0;
+
+const strokeArrowExport = (ctx, x1, y1, x2, y2, headLenPx) => {
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+
+  const angle = Math.atan2(y2 - y1, x2 - x1);
+  const a1 = angle - Math.PI / 7;
+  const a2 = angle + Math.PI / 7;
+
+  const hx1 = x2 - headLenPx * Math.cos(a1);
+  const hy1 = y2 - headLenPx * Math.sin(a1);
+  const hx2 = x2 - headLenPx * Math.cos(a2);
+  const hy2 = y2 - headLenPx * Math.sin(a2);
+
+  ctx.beginPath();
+  ctx.moveTo(x2, y2);
+  ctx.lineTo(hx1, hy1);
+  ctx.moveTo(x2, y2);
+  ctx.lineTo(hx2, hy2);
+  ctx.stroke();
+};
 
         for (let i = 1; i <= totalPages; i++) {
           const page = await pdfDoc.getPage(i);
@@ -1546,3 +1553,4 @@
   </script>
 </body>
 </html>
+export default App;
