@@ -174,6 +174,7 @@
     /* Disabled states */
     button:disabled { opacity: 0.5; cursor: not-allowed; }
     .disabled\\:opacity-30:disabled { opacity: 0.3; }
+    .disabled\\:cursor-not-allowed:disabled { cursor: not-allowed; }
     
     /* Animation */
     @keyframes spin {
@@ -271,6 +272,7 @@
     const ChevronRight = (props) => React.createElement('i', { ...props, 'data-lucide': 'chevron-right' });
     const ZoomIn = (props) => React.createElement('i', { ...props, 'data-lucide': 'zoom-in' });
     const ZoomOut = (props) => React.createElement('i', { ...props, 'data-lucide': 'zoom-out' });
+    const Copy = (props) => React.createElement('i', { ...props, 'data-lucide': 'copy' });
 
     // Initialize lucide icons after render
     const useLucideIcons = () => {
@@ -1037,6 +1039,22 @@
         setSelectedIndex(-1);
       };
 
+      const copySelectedAnnotation = () => {
+        if (selectedIndex === -1) return;
+        const pageAnns = annotations[pageNum] || [];
+        if (selectedIndex < 0 || selectedIndex >= pageAnns.length) return;
+
+        const ann = pageAnns[selectedIndex];
+        const offset = 20 / scale; 
+        const newAnn = translateAnn(ann, offset, offset);
+        
+        setAnnotations((prev) => ({
+          ...prev,
+          [pageNum]: [...(prev[pageNum] || []), newAnn],
+        }));
+        setSelectedIndex(pageAnns.length);
+      };
+
       const changePage = (delta) => {
         const next = pageNum + delta;
         if (next >= 1 && next <= totalPages) {
@@ -1326,19 +1344,30 @@
               <div className="flex items-center gap-1">
                  <button
                    onClick={() => setScale(s => Math.min(5, s + 0.1))}
-                   className="p-2 hover:bg-gray-100 rounded text-gray-600 hidden sm:block"
+                   className="p-2 hover:bg-gray-100 rounded text-gray-600"
                    title="Zoom In"
                  >
                    <ZoomIn size={18} />
                  </button>
                  <button
                    onClick={() => setScale(s => Math.max(0.25, s - 0.1))}
-                   className="p-2 hover:bg-gray-100 rounded text-gray-600 hidden sm:block"
+                   className="p-2 hover:bg-gray-100 rounded text-gray-600"
                    title="Zoom Out"
                  >
                    <ZoomOut size={18} />
                  </button>
               </div>
+
+              <div className="h-6 w-px bg-gray-300 mx-1"></div>
+
+              <button
+                onClick={copySelectedAnnotation}
+                disabled={selectedIndex === -1}
+                className="p-2 hover:bg-gray-100 rounded text-gray-600 disabled:opacity-30 disabled:cursor-not-allowed"
+                title="Copy Selected Object"
+              >
+                <Copy size={18} />
+              </button>
 
               <button
                 onClick={undoLast}
