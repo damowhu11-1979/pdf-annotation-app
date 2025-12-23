@@ -19,6 +19,7 @@ import {
   ChevronRight,
   ZoomIn,
   ZoomOut,
+  Copy,
 } from "lucide-react";
 
 // External libraries via CDN
@@ -798,6 +799,22 @@ const App = () => {
     setSelectedIndex(-1);
   };
 
+  const copySelectedAnnotation = () => {
+    if (selectedIndex === -1) return;
+    const pageAnns = annotations[pageNum] || [];
+    if (selectedIndex < 0 || selectedIndex >= pageAnns.length) return;
+
+    const ann = pageAnns[selectedIndex];
+    const offset = 20 / scale; 
+    const newAnn = translateAnn(ann, offset, offset);
+    
+    setAnnotations((prev) => ({
+      ...prev,
+      [pageNum]: [...(prev[pageNum] || []), newAnn],
+    }));
+    setSelectedIndex(pageAnns.length);
+  };
+
   const changePage = (delta) => {
     const next = pageNum + delta;
     if (next >= 1 && next <= totalPages) {
@@ -1112,6 +1129,17 @@ const App = () => {
                <ZoomOut size={18} />
              </button>
           </div>
+
+          <div className="h-6 w-px bg-gray-300 mx-1"></div>
+
+          <button
+            onClick={copySelectedAnnotation}
+            disabled={selectedIndex === -1}
+            className="p-2 hover:bg-gray-100 rounded text-gray-600 disabled:opacity-30 disabled:cursor-not-allowed"
+            title="Copy Selected Object"
+          >
+            <Copy size={18} />
+          </button>
 
           <button
             onClick={undoLast}
