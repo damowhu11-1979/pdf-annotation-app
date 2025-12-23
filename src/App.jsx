@@ -929,7 +929,7 @@ const App = () => {
             >
               <Upload size={18} />
               <span className="hidden sm:inline">
-                {uploadDisabled ? "Init..." : "Open"}
+                {uploadDisabled ? "Loading…" : "Upload"}
               </span>
             </label>
             <input
@@ -946,7 +946,7 @@ const App = () => {
           <div className="h-6 w-px bg-gray-300 mx-2 shrink-0"></div>
 
           {/* Drawing Tools */}
-          <div className="flex items-center gap-1 bg-gray-50 p-1 rounded-lg border overflow-x-auto max-w-[40vw] sm:max-w-none no-scrollbar shrink-0">
+          <div className="flex items-center gap-1 bg-gray-50 p-1 rounded-lg border overflow-x-auto max-w-[50vw] sm:max-w-none no-scrollbar shrink-0">
             <ToolButton
               active={activeTool === "cursor"}
               onClick={() => setActiveTool("cursor")}
@@ -1064,7 +1064,7 @@ const App = () => {
         </div>
 
         {/* Right Actions: Pagination & Export */}
-        <div className="flex items-center gap-3 shrink-0 ml-auto">
+        <div className="flex items-center gap-2 shrink-0 ml-auto">
           {/* Pagination Controls */}
           {pdfDoc && (
              <div className="flex items-center gap-1 bg-gray-50 p-1 rounded-lg border">
@@ -1087,8 +1087,8 @@ const App = () => {
                 </button>
              </div>
           )}
-
-          <div className="h-6 w-px bg-gray-300 mx-1"></div>
+          
+          {pdfDoc && <div className="h-6 w-px bg-gray-300 mx-1"></div>}
 
           <div className="flex items-center gap-1">
              <button
@@ -1110,7 +1110,7 @@ const App = () => {
           <button
             onClick={undoLast}
             className="p-2 hover:bg-gray-100 rounded text-gray-600"
-            title="Undo"
+            title="Undo last action"
           >
             <RotateCcw size={18} />
           </button>
@@ -1127,6 +1127,8 @@ const App = () => {
             <Trash2 size={18} />
           </button>
 
+          <div className="h-6 w-px bg-gray-300 mx-2"></div>
+
           <button
             onClick={exportPDF}
             disabled={!pdfDoc}
@@ -1137,7 +1139,7 @@ const App = () => {
             }`}
           >
             <Save size={18} />
-            <span className="hidden sm:inline">Save</span>
+            <span className="hidden sm:inline">Save PDF</span>
           </button>
         </div>
       </div>
@@ -1151,30 +1153,34 @@ const App = () => {
         onContextMenu={(e) => e.preventDefault()}
       >
         {!pdfDoc ? (
-          <div className="flex flex-col items-center justify-center h-full p-8 text-gray-500">
-             <div className="bg-white p-10 rounded-2xl shadow-sm text-center max-w-md border border-gray-100">
-               <div className="bg-blue-50 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6">
-                 <Upload size={32} className="text-blue-600" />
-               </div>
-               <h3 className="text-xl font-bold text-gray-800 mb-2">Upload a Document</h3>
-               <p className="mb-8 text-gray-500">Select a PDF file to start annotating.</p>
-               <label
-                className={`px-6 py-3 rounded-xl font-medium transition inline-block ${
+          <div className="flex flex-col items-center justify-center text-gray-400 h-full p-8">
+            <div className="bg-white p-8 rounded-2xl shadow-sm text-center max-w-md">
+              <Upload size={48} className="mx-auto mb-4 text-blue-500 opacity-50" />
+              <h3 className="text-xl font-semibold text-gray-700 mb-2">
+                Upload a Document
+              </h3>
+              <p className="mb-6">
+                Select a PDF file to start annotating.
+              </p>
+
+              <label
+                htmlFor="pdf-upload"
+                className={`px-6 py-2 rounded-lg transition inline-block ${
                   uploadDisabled
-                    ? "bg-gray-100 text-gray-400 cursor-wait"
-                    : "bg-blue-600 text-white hover:bg-blue-700 hover:shadow-lg hover:-translate-y-0.5 transform duration-200 cursor-pointer"
+                    ? "bg-gray-200 text-gray-400 cursor-not-allowed"
+                    : "bg-blue-600 text-white hover:bg-blue-700 cursor-pointer"
                 }`}
+                onClick={(e) => {
+                  if (uploadDisabled) e.preventDefault();
+                }}
               >
-                {uploadDisabled ? "Initializing..." : "Choose PDF File"}
-                <input
-                  type="file"
-                  accept=".pdf"
-                  className="hidden"
-                  onChange={handleFileUpload}
-                  disabled={uploadDisabled}
-                />
+                {uploadDisabled ? "Loading PDF engine…" : "Choose PDF"}
               </label>
-             </div>
+
+              <div className="mt-4 text-xs text-gray-500">
+                Pan tips: hold <b>Space</b> + drag, or <b>middle mouse</b>, or <b>right mouse</b>.
+              </div>
+            </div>
           </div>
         ) : (
           <div className="p-8 w-max h-max mx-auto">
